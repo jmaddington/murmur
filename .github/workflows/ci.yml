@@ -35,6 +35,9 @@ jobs:
       - name: Rust unit tests
         run: cd core && cargo test --release
 
+      - name: Build app
+        run: ./scripts/build.sh
+
       - name: End-to-end tests
         env:
           # Optional: set this secret to also run the live OpenRouter cases (costs a few cents).

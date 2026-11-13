@@ -4,7 +4,7 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."
 OUT=${1:-build/e2e}
 rm -rf "$OUT"; mkdir -p "$OUT"
-./scripts/build.sh >/dev/null || exit 1
+./scripts/build.sh > "$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 1; }
 (cd core && cargo test --release --quiet 2>&1 | grep "test result") || exit 1
 
 python3 tests/e2e/mock_server.py 8765 & MOCK=$!
