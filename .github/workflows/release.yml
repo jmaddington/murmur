@@ -33,6 +33,14 @@ jobs:
           rustup default stable
           brew install create-dmg
 
+      # Tests run before any certificates touch the keychain: the e2e harness
+      # writes throwaway Keychain items and must never meet a signing keychain.
+      - name: Test
+        timeout-minutes: 15
+        run: |
+          (cd core && cargo test --release)
+          ./tests/e2e/run.sh build/e2e
+
       - name: Import signing certificates
         env:
           DEVELOPER_ID_APP_P12: ${{ secrets.DEVELOPER_ID_APP_P12 }}
@@ -44,12 +52,8 @@ jobs:
           ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
         run: scripts/ci/import-certs.sh
 
-      - name: Test
-        run: |
-          (cd core && cargo test --release)
-          ./tests/e2e/run.sh build/e2e
-
       - name: Build, sign, package, notarize
+        timeout-minutes: 30
         run: |
           ./scripts/build.sh
           ./scripts/package.sh

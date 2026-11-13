@@ -35,12 +35,12 @@ enum Demo {
         Keychain.set(E2E.resolveEnv("$OPENROUTER_API_KEY"), for: .openrouter)
 
         let steps: [Step] = [
-            Step(audio: "basic.aiff"),
-            Step(audio: "vocab.aiff", vocabulary: [
+            Step(audio: "basic"),
+            Step(audio: "vocab", vocabulary: [
                 VocabTerm(term: "JQ Reyes", soundsLike: ["jay queue reyes", "jake you raised"]),
                 VocabTerm(term: "Kubernetes", soundsLike: ["cooper netties"]),
             ]),
-            Step(audio: "cleanup.aiff", cleanup: hasKey ? .openrouter : .apple, model: "anthropic/claude-haiku-4.5"),
+            Step(audio: "cleanup", cleanup: hasKey ? .openrouter : .apple, model: "anthropic/claude-haiku-4.5"),
         ]
 
         // Stage: hide everything else, cover the desktop.
@@ -111,10 +111,15 @@ enum Demo {
             if let m = step.model { cfg.openrouterCleanupModel = m }
             AppSettings.shared.config = cfg
 
-            let url = audioDir.appendingPathComponent(step.audio)
+            let url = ["wav", "aiff", "m4a"].map { audioDir.appendingPathComponent("\(step.audio).\($0)") }
+                .first { FileManager.default.fileExists(atPath: $0.path) } ?? audioDir.appendingPathComponent(step.audio)
             let src = FileSource(url: url, realtime: true)
             timeline.append(["audio": url.path, "start": Date().timeIntervalSince(t0)])
             DictationController.shared.begin(source: src)
+            guard DictationController.shared.phase == .listening else {
+                E2E.log("demo step \(i + 1): could not start (\(url.lastPathComponent))")
+                continue
+            }
             await src.waitUntilDone()
             try? await Task.sleep(for: .milliseconds(250))
             let entry = await DictationController.shared.stop(insert: target.isFrontmost)?.value

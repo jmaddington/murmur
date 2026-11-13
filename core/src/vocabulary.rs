@@ -72,7 +72,8 @@ fn fuzzy_replace(text: &str, phrase: &str, term: &str) -> String {
     if target.chars().count() < 8 {
         return text.to_string();
     }
-    let max_dist = (target.chars().count() / 8).max(1);
+    // ~1 edit per 5 letters: "kubernettis" → "Kubernetes", "coopernettis" → "cooper netties".
+    let max_dist = ((target.chars().count() + 2) / 5).max(1);
     let word_re = Regex::new(r"[\w'’.\-]+").unwrap();
     let words: Vec<regex::Match> = word_re.find_iter(text).collect();
     let mut out = String::new();
@@ -87,7 +88,8 @@ fn fuzzy_replace(text: &str, phrase: &str, term: &str) -> String {
             let start = words[i].start();
             let end = words[i + span - 1].end();
             let candidate = squash(&text[start..end]);
-            if candidate == squash(term) {
+            // Already correct (possibly with a neighbouring word): nothing to fix.
+            if candidate.contains(&squash(term)) {
                 continue;
             }
             if levenshtein(&candidate, &target) <= max_dist {
@@ -131,10 +133,9 @@ pub fn apply(text: &str, vocab: &[Term]) -> String {
             out = re.replace_all(&out, regex::NoExpand(to)).into_owned();
         }
     }
-    for (from, to, explicit) in &pairs {
-        if *explicit {
-            out = fuzzy_replace(&out, from, to);
-        }
+    // Fuzzy pass covers explicit variants and the (long enough) term itself.
+    for (from, to, _) in &pairs {
+        out = fuzzy_replace(&out, from, to);
     }
     out
 }
@@ -183,6 +184,21 @@ mod tests {
         assert_eq!(apply("look at the Cooper Netti's dashboard", &v), "look at the Kubernetes dashboard");
         // Short / unrelated words are left alone.
         assert_eq!(apply("cooper said hello", &v), "cooper said hello");
+    }
+
+    #[test]
+    fn fuzzy_term_itself() {
+        let v = vec![t("Kubernetes", &[])];
+        assert_eq!(apply("look at the Kubernetti's dashboard", &v), "look at the Kubernetes dashboard");
+        // Unrelated words of similar length are left alone.
+        assert_eq!(apply("the government dashboard", &v), "the government dashboard");
+        assert_eq!(apply("the governess arrived", &v), "the governess arrived");
+    }
+
+    #[test]
+    fn short_terms_are_exact_only() {
+        let v = vec![t("Rust", &[]), t("JQ Reyes", &[])];
+        assert_eq!(apply("I trust Rest and rust", &v), "I trust Rest and Rust");
     }
 
     #[test]

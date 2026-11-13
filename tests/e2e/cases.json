@@ -143,12 +143,12 @@
     "mock": true
   },
   {
-    "name": "LIVE OpenRouter \u00b7 Gemini audio transcription + vocabulary",
+    "name": "LIVE OpenRouter \u00b7 gpt-audio-mini audio transcription + vocabulary",
     "requires_env": "OPENROUTER_API_KEY",
     "audio": "audio/vocab.aiff",
     "engine": "openrouter",
     "api_key": "$OPENROUTER_API_KEY",
-    "model": "google/gemini-2.5-flash",
+    "model": "openai/gpt-audio-mini",
     "vocabulary": [
       {
         "term": "JQ Reyes",
@@ -171,7 +171,7 @@
     ]
   },
   {
-    "name": "LIVE OpenRouter \u00b7 Gemini transcription + Claude Haiku cleanup",
+    "name": "LIVE OpenRouter \u00b7 gpt-audio-mini transcription + Claude Haiku cleanup",
     "requires_env": "OPENROUTER_API_KEY",
     "audio": "audio/cleanup.aiff",
     "engine": "openrouter",
@@ -186,17 +186,17 @@
       "No wait",
       "Um"
     ],
-    "transcribe_model": "google/gemini-2.5-flash"
+    "transcribe_model": "openai/gpt-audio-mini"
   },
   {
-    "name": "LIVE OpenRouter \u00b7 audio-aware cleanup (Gemini hears the recording)",
+    "name": "LIVE OpenRouter \u00b7 audio-aware cleanup (gpt-audio-mini hears the recording)",
     "requires_env": "OPENROUTER_API_KEY",
     "audio": "audio/basic.aiff",
     "engine": "openrouter",
     "cleanup": "openrouter",
     "cleanup_sends_audio": true,
     "api_key": "$OPENROUTER_API_KEY",
-    "model": "google/gemini-2.5-flash",
+    "model": "openai/gpt-audio-mini",
     "expect_contains": [
       "design review",
       "Wednesday",

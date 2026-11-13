@@ -39,6 +39,7 @@ jobs:
         run: ./scripts/build.sh
 
       - name: End-to-end tests
+        timeout-minutes: 15
         env:
           # Optional: set this secret to also run the live OpenRouter cases (costs a few cents).
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_E2E_KEY }}
