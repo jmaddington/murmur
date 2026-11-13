@@ -369,8 +369,11 @@ enum E2E {
             SettingsWindowController.shared.window?.orderOut(nil)
 
             let ctl = DictationController.shared
-            let wave: [Float] = (0..<DictationController.barCount).map { i in
-                Float(0.25 + 0.7 * abs(sin(Double(i) * 0.55)) * (0.6 + 0.4 * cos(Double(i) * 0.21)))
+            let wave: [Float] = (0..<DictationController.barCount).map { (i: Int) -> Float in
+                let x = Double(i)
+                let swing: Double = abs(sin(x * 0.55))
+                let envelope: Double = 0.6 + 0.4 * cos(x * 0.21)
+                return Float(0.25 + 0.7 * swing * envelope)
             }
             let states: [(String, () -> Void)] = [
                 ("listening", { ctl.debugSet(phase: .listening, partial: "Let's move the Kubernetes review to Wednesday and loop in", levels: wave) }),
