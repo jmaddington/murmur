@@ -338,8 +338,13 @@ enum E2E {
                 out.append(Result(name: name + " — no audio (virtual device)", passed: true, raw: "", final: "", seconds: 0, notes: ["no buffers"]))
                 continue
             }
-            let ok = secs > 1.2 && secs < 1.9 && rms > 0
-            let note = String(format: "captured %.2fs @16kHz, rms %.1f dBFS (non-zero samples ✓)", secs, 20 * log10(max(rms, 1e-9)))
+            let onCI = ProcessInfo.processInfo.environment["CI"] != nil
+            let digitalSilence = rms == 0
+            // Exact zeros from a real mic usually mean capture is blocked; CI's
+            // virtual devices legitimately produce them.
+            let ok = secs > 1.2 && secs < 1.9 && (!digitalSilence || onCI)
+            let note = String(format: "captured %.2fs @16kHz, rms %.1f dBFS", secs, 20 * log10(max(rms, 1e-9)))
+                + (digitalSilence ? (onCI ? " (digital silence — virtual CI device)" : " (all-zero samples — capture blocked?)") : " (non-zero samples ✓)")
             log("  → \(ok ? "PASS" : "FAIL") \(name): \(note)")
             out.append(Result(name: name, passed: ok, raw: "", final: "", seconds: secs, notes: [note]))
         }
