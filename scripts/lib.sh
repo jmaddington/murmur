@@ -29,8 +29,9 @@ notarize() {
   local f=$1 out id status
   out=$(xcrun notarytool submit "$f" --key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
         --wait --timeout 30m --output-format json 2>&1) || true
-  id=$(print -r -- "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null)
-  status=$(print -r -- "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null)
+  # notarytool prints plain text (not JSON) on auth/config errors; never let parsing abort the script.
+  id=$(print -r -- "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)
+  status=$(print -r -- "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
   print "  notarization ${id:-?}: ${status:-unknown}"
   if [[ "$status" != "Accepted" ]]; then
     local log=""

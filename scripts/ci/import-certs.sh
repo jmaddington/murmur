@@ -33,12 +33,24 @@ echo "MURMUR_SIGN_IDENTITY=$APP_ID" >> "$GITHUB_ENV"
 echo "MURMUR_INSTALLER_IDENTITY=$PKG_ID" >> "$GITHUB_ENV"
 
 if [[ -n "${ASC_API_KEY_P8:-}" ]]; then
-  echo "$ASC_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+  # Accept the .p8 as pasted text or base64 of the file.
+  if [[ "$ASC_API_KEY_P8" == *"BEGIN PRIVATE KEY"* ]]; then
+    printf '%s\n' "$ASC_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+  else
+    echo "$ASC_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8" 2>/dev/null || printf '%s\n' "$ASC_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+  fi
+  # Validate the credentials now so a bad key fails here, legibly.
+  if ! NOTARY_CHECK=$(xcrun notarytool history --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$ASC_API_KEY_ID" --issuer "$ASC_API_ISSUER_ID" 2>&1 | tail -5); then
+    echo "$NOTARY_CHECK"
+    MSG=${NOTARY_CHECK//$'\n'/%0A}
+    echo "::error title=Notary API key rejected::$MSG%0AKey file looks like PEM: $(grep -q 'BEGIN PRIVATE KEY' "$RUNNER_TEMP/AuthKey.p8" && echo yes || echo no), lines: $(wc -l < "$RUNNER_TEMP/AuthKey.p8" | tr -d ' ')"
+    exit 1
+  fi
   { echo "NOTARY_KEY_PATH=$RUNNER_TEMP/AuthKey.p8"
     echo "NOTARY_KEY_ID=$ASC_API_KEY_ID"
     echo "NOTARY_ISSUER=$ASC_API_ISSUER_ID"; } >> "$GITHUB_ENV"
 fi
-SUMMARY="Developer ID Application: ${APP_ID:+found}${APP_ID:-MISSING} · Developer ID Installer: ${PKG_ID:+found}${PKG_ID:-MISSING} · Notary API key: ${ASC_API_KEY_ID:+set}${ASC_API_KEY_ID:-MISSING}"
+SUMMARY="App identity: ${APP_ID:-MISSING} · Installer identity: ${PKG_ID:-MISSING} · Notary key: ${ASC_API_KEY_ID:+set}${ASC_API_KEY_ID:-MISSING}"
 echo "$SUMMARY"
 echo "::notice title=Signing setup::$SUMMARY"
 if [[ -z "$APP_ID" ]]; then
