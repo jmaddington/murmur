@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version (e.g. 1.2.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 60
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        run: |
+          V="${{ github.event.inputs.version }}"
+          [[ -z "$V" ]] && V="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+          echo "BUILD=${{ github.run_number }}" >> "$GITHUB_ENV"
+
+      - name: Toolchains
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          rustup default stable
+          brew install create-dmg
+
+      - name: Import signing certificates
+        env:
+          DEVELOPER_ID_APP_P12: ${{ secrets.DEVELOPER_ID_APP_P12 }}
+          DEVELOPER_ID_APP_PASSWORD: ${{ secrets.DEVELOPER_ID_APP_PASSWORD }}
+          DEVELOPER_ID_INSTALLER_P12: ${{ secrets.DEVELOPER_ID_INSTALLER_P12 }}
+          DEVELOPER_ID_INSTALLER_PASSWORD: ${{ secrets.DEVELOPER_ID_INSTALLER_PASSWORD }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: scripts/ci/import-certs.sh
+
+      - name: Test
+        run: |
+          (cd core && cargo test --release)
+          ./tests/e2e/run.sh build/e2e
+
+      - name: Build, sign, package, notarize
+        run: |
+          ./scripts/build.sh
+          ./scripts/package.sh
+
+      - name: Verify
+        run: |
+          codesign --verify --deep --strict --verbose=2 build/Murmur.app
+          spctl --assess --type execute -v build/Murmur.app || echo "::warning::Gatekeeper assessment failed (unsigned build?)"
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v$VERSION"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Murmur $VERSION" --generate-notes
+          gh release upload "$TAG" build/dist/* --clobber
+
+      - name: Clean up keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/murmur-signing.keychain-db" || true

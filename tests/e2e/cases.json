@@ -1,0 +1,211 @@
+[
+  {
+    "name": "on-device \u00b7 Speech model \u00b7 plain dictation",
+    "audio": "audio/basic.aiff",
+    "engine": "apple",
+    "apple_model": "speech",
+    "expect_contains": [
+      "design review",
+      "Wednesday",
+      "agenda"
+    ],
+    "requires": [
+      "apple_speech"
+    ]
+  },
+  {
+    "name": "on-device \u00b7 Dictation model \u00b7 plain dictation",
+    "audio": "audio/basic.aiff",
+    "engine": "apple",
+    "apple_model": "dictation",
+    "expect_contains": [
+      "Wednesday",
+      "agenda"
+    ],
+    "requires": [
+      "apple_speech"
+    ]
+  },
+  {
+    "name": "on-device \u00b7 custom vocabulary corrections",
+    "audio": "audio/vocab.aiff",
+    "engine": "apple",
+    "apple_model": "speech",
+    "vocabulary": [
+      {
+        "term": "JQ Reyes",
+        "sounds_like": [
+          "jay queue reyes",
+          "jake you raised"
+        ]
+      },
+      {
+        "term": "Kubernetes",
+        "sounds_like": [
+          "cooper netties"
+        ]
+      }
+    ],
+    "expect_contains": [
+      "JQ Reyes",
+      "Kubernetes",
+      "dashboard"
+    ],
+    "requires": [
+      "apple_speech"
+    ]
+  },
+  {
+    "name": "on-device \u00b7 Apple Intelligence cleanup (fillers + self-correction)",
+    "audio": "audio/cleanup.aiff",
+    "engine": "apple",
+    "cleanup": "apple",
+    "expect_contains": [
+      "Wednesday"
+    ],
+    "expect_not_contains": [
+      "Tuesday",
+      "No wait"
+    ],
+    "requires": [
+      "apple_speech",
+      "apple_intelligence"
+    ]
+  },
+  {
+    "name": "insertion into a focused text field",
+    "audio": "audio/short.aiff",
+    "engine": "apple",
+    "insert": true,
+    "expect_contains": [
+      "Testing"
+    ],
+    "requires": [
+      "apple_speech"
+    ]
+  },
+  {
+    "name": "OpenAI-compatible server \u00b7 multipart transcription + vocab + chat cleanup",
+    "audio": "audio/short.aiff",
+    "engine": "openaiCompatible",
+    "cleanup": "openaiCompatible",
+    "custom_url": "http://127.0.0.1:8765/v1",
+    "api_key": "test-key",
+    "model": "mock/text-model",
+    "style": "British spelling",
+    "vocabulary": [
+      {
+        "term": "Kubernetes",
+        "sounds_like": [
+          "cooper netties"
+        ]
+      }
+    ],
+    "expect_contains": [
+      "Polished:",
+      "Kubernetes",
+      "prompt ok",
+      "vocab ok",
+      "style ok"
+    ],
+    "mock": true
+  },
+  {
+    "name": "OpenRouter \u00b7 audio transcription + audio-aware cleanup",
+    "audio": "audio/short.aiff",
+    "engine": "openrouter",
+    "cleanup": "openrouter",
+    "cleanup_sends_audio": true,
+    "api_key": "test-key",
+    "model": "mock/audio-model",
+    "vocabulary": [
+      {
+        "term": "Kubernetes"
+      }
+    ],
+    "expect_contains": [
+      "SwiftUI",
+      "[audio ok]",
+      "audio ok",
+      "vocab ok"
+    ],
+    "mock": true
+  },
+  {
+    "name": "OpenRouter \u00b7 bad API key surfaces a clear error",
+    "audio": "audio/short.aiff",
+    "engine": "openrouter",
+    "api_key": "wrong-key",
+    "model": "mock/audio-model",
+    "expect_contains": [
+      "__expect_error__"
+    ],
+    "mock": true
+  },
+  {
+    "name": "LIVE OpenRouter \u00b7 Gemini audio transcription + vocabulary",
+    "requires_env": "OPENROUTER_API_KEY",
+    "audio": "audio/vocab.aiff",
+    "engine": "openrouter",
+    "api_key": "$OPENROUTER_API_KEY",
+    "model": "google/gemini-2.5-flash",
+    "vocabulary": [
+      {
+        "term": "JQ Reyes",
+        "sounds_like": [
+          "jay queue reyes",
+          "jake you raised"
+        ]
+      },
+      {
+        "term": "Kubernetes",
+        "sounds_like": [
+          "cooper netties"
+        ]
+      }
+    ],
+    "expect_contains": [
+      "JQ Reyes",
+      "Kubernetes",
+      "dashboard"
+    ]
+  },
+  {
+    "name": "LIVE OpenRouter \u00b7 on-device transcription + Claude Haiku cleanup",
+    "requires_env": "OPENROUTER_API_KEY",
+    "audio": "audio/cleanup.aiff",
+    "engine": "apple",
+    "cleanup": "openrouter",
+    "api_key": "$OPENROUTER_API_KEY",
+    "model": "anthropic/claude-haiku-4.5",
+    "expect_contains": [
+      "Wednesday"
+    ],
+    "expect_not_contains": [
+      "Tuesday",
+      "No wait",
+      "Um"
+    ],
+    "requires": [
+      "apple_speech"
+    ]
+  },
+  {
+    "name": "LIVE OpenRouter \u00b7 audio-aware cleanup (Gemini hears the recording)",
+    "requires_env": "OPENROUTER_API_KEY",
+    "audio": "audio/basic.aiff",
+    "engine": "apple",
+    "cleanup": "openrouter",
+    "cleanup_sends_audio": true,
+    "api_key": "$OPENROUTER_API_KEY",
+    "model": "google/gemini-2.5-flash",
+    "expect_contains": [
+      "design review",
+      "Wednesday",
+      "agenda"
+    ],
+    "requires": [
+      "apple_speech"
+    ]
+  }
+]

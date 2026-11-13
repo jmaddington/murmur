@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Murmur</title>
+    <organization>{{BUNDLE_ID}}</organization>
+    <background file="pkg-background.png" mime-type="image/png" alignment="bottomleft" scaling="none"/>
+    <background-darkAqua file="pkg-background-dark.png" mime-type="image/png" alignment="bottomleft" scaling="none"/>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <options customize="never" require-scripts="false" hostArchitectures="arm64"/>
+    <domains enable_localSystem="true"/>
+    <volume-check>
+        <allowed-os-versions><os-version min="26.0"/></allowed-os-versions>
+    </volume-check>
+    <choices-outline><line choice="default"><line choice="{{BUNDLE_ID}}"/></line></choices-outline>
+    <choice id="default"/>
+    <choice id="{{BUNDLE_ID}}" visible="false"><pkg-ref id="{{BUNDLE_ID}}"/></choice>
+    <pkg-ref id="{{BUNDLE_ID}}" version="{{VERSION}}" onConclusion="none">Murmur-component.pkg</pkg-ref>
+</installer-gui-script>

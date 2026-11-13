@@ -1,0 +1,9 @@
+#!/bin/bash
+# Relaunch Murmur for the logged-in user after an install/upgrade.
+pkill -x Murmur 2>/dev/null || true
+USER_NAME=$(stat -f%Su /dev/console)
+if [[ -n "$USER_NAME" && "$USER_NAME" != "root" && "$USER_NAME" != "loginwindow" ]]; then
+  UID_NUM=$(id -u "$USER_NAME")
+  launchctl asuser "$UID_NUM" sudo -u "$USER_NAME" /usr/bin/open -g /Applications/Murmur.app || true
+fi
+exit 0

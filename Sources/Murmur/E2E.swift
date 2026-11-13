@@ -1,0 +1,515 @@
+import AppKit
+import AVFoundation
+import ApplicationServices
+import SwiftUI
+
+/// Scriptable end-to-end harness.
+///
+///   Murmur --e2e --out DIR [--cases cases.json] [--screenshots]
+///
+/// Runs each case's audio file through the *real* pipeline (HUD, analyzer,
+/// vocabulary, cleanup, insertion, history), asserts on the output, captures
+/// screenshots of every pane and HUD state in light & dark, and writes
+/// DIR/report.json. Exits non-zero on any failure. Settings and history are
+/// isolated from the user's real ones.
+enum E2E {
+    static let args = CommandLine.arguments
+    static var isActive: Bool { args.contains("--e2e") }
+    static func value(_ flag: String) -> String? {
+        guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+    static var outDir: URL { URL(fileURLWithPath: value("--out") ?? NSTemporaryDirectory() + "murmur-e2e") }
+
+    struct Case: Decodable {
+        var name: String
+        var audio: String
+        var engine: TranscriptionEngine?
+        var appleModel: AppleSpeechModel?
+        var cleanup: CleanupEngine?
+        var vocabulary: [VocabTerm]?
+        var expectContains: [String]?
+        var expectNotContains: [String]?
+        var insert: Bool?
+        var customUrl: String?
+        var apiKey: String?
+        var model: String?
+        var cleanupSendsAudio: Bool?
+        var style: String?
+        var requiresEnv: String?
+        var mock: Bool?
+        /// Capabilities this case needs: apple_speech, apple_intelligence.
+        var requires: [String]?
+    }
+
+    @MainActor private static var capabilityCache: [String: Bool] = [:]
+
+    @MainActor private static func has(_ capability: String) async -> Bool {
+        if let v = capabilityCache[capability] { return v }
+        let v: Bool
+        switch capability {
+        case "apple_speech":
+            let locale = Locale(identifier: AppSettings.shared.config.localeIdentifier)
+            do {
+                try await AppleSpeech.ensureInstalled(locale: locale, model: .speech)
+                try await AppleSpeech.ensureInstalled(locale: locale, model: .dictation)
+                v = true
+            } catch {
+                v = false
+            }
+        case "apple_intelligence":
+            v = Cleanup.appleAvailability == nil
+        default:
+            v = true
+        }
+        capabilityCache[capability] = v
+        return v
+    }
+
+    struct Result: Encodable {
+        var name: String
+        var passed: Bool
+        var raw: String
+        var final: String
+        var seconds: Double
+        var notes: [String]
+    }
+
+    @MainActor static func run() async {
+        NSApp.setActivationPolicy(.regular)
+        try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        let shots = outDir.appendingPathComponent("screenshots")
+        try? FileManager.default.createDirectory(at: shots, withIntermediateDirectories: true)
+        AppSettings.shared.config = Config()
+        AppSettings.shared.config.hasOnboarded = true
+        AppSettings.shared.config.playSounds = false
+
+        var results: [Result] = []
+        var skipped: [String] = []
+        let env: [String: Any] = [
+            "accessibility": AXIsProcessTrusted(),
+            "screen_capture": CGPreflightScreenCaptureAccess(),
+            "apple_intelligence": Cleanup.appleAvailability ?? "available",
+            "microphones": MicrophoneManager.shared.devices.map(\.name),
+        ]
+        log("environment: \(env)")
+        Cleanup.prewarmApple()
+
+        if let path = value("--cases") {
+            do {
+                let dec = JSONDecoder()
+                dec.keyDecodingStrategy = .convertFromSnakeCase
+                let cases = try dec.decode([Case].self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+                for (i, c) in cases.enumerated() {
+                    if let v = c.requiresEnv, ProcessInfo.processInfo.environment[v]?.isEmpty ?? true {
+                        log("skip \(c.name) (set \(v))")
+                        continue
+                    }
+                    var missing: [String] = []
+                    for r in c.requires ?? [] where !(await has(r)) { missing.append(r) }
+                    if !missing.isEmpty {
+                        log("skip \(c.name) (unavailable here: \(missing.joined(separator: ", ")))")
+                        skipped.append(c.name)
+                        continue
+                    }
+                    results.append(await runCase(c, index: i, shots: shots))
+                }
+            } catch {
+                results.append(Result(name: "load cases", passed: false, raw: "", final: "", seconds: 0, notes: ["\(error)"]))
+            }
+        }
+
+        results.append(contentsOf: await microphoneTests())
+
+        if args.contains("--screenshots") {
+            await screenshots(to: shots)
+        }
+
+        let report: [String: Any] = [
+            "environment": env,
+            "results": results.map { r in
+                ["name": r.name, "passed": r.passed, "raw": r.raw, "final": r.final,
+                 "seconds": (r.seconds * 100).rounded() / 100, "notes": r.notes] as [String: Any]
+            },
+            "passed": results.filter(\.passed).count,
+            "failed": results.filter { !$0.passed }.count,
+            "skipped": skipped,
+        ]
+        // Never leave test keys behind in the Keychain.
+        for acct in [Keychain.Account.openrouter, .customTranscribe, .customCleanup] { Keychain.set("", for: acct) }
+        let data = try! JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+        try? data.write(to: outDir.appendingPathComponent("report.json"))
+        print(String(decoding: data, as: UTF8.self))
+        exit(results.allSatisfy(\.passed) ? 0 : 1)
+    }
+
+    // MARK: Pipeline cases
+
+    @MainActor private static func runCase(_ c: Case, index: Int, shots: URL) async -> Result {
+        log("case \(c.name)")
+        var cfg = AppSettings.shared.config
+        cfg.engine = c.engine ?? .apple
+        cfg.appleModel = c.appleModel ?? .speech
+        cfg.vocabulary = c.vocabulary ?? []
+        cfg.cleanupEnabled = c.cleanup != nil
+        cfg.cleanupEngine = c.cleanup ?? .apple
+        cfg.cleanupSendsAudio = c.cleanupSendsAudio ?? false
+        cfg.cleanupStyle = c.style ?? ""
+        if let u = c.customUrl { cfg.customTranscribeURL = u; cfg.customCleanupURL = u }
+        if let m = c.model {
+            cfg.openrouterTranscribeModel = m; cfg.openrouterCleanupModel = m
+            cfg.customTranscribeModel = m; cfg.customCleanupModel = m
+        }
+        AppSettings.shared.config = cfg
+        if c.mock == true, let base = ProcessInfo.processInfo.environment["MURMUR_E2E_MOCK_BASE"] {
+            setenv("MURMUR_OPENROUTER_BASE", base, 1)
+        } else {
+            unsetenv("MURMUR_OPENROUTER_BASE")
+        }
+        for acct in [Keychain.Account.openrouter, .customTranscribe, .customCleanup] { Keychain.set(resolveEnv(c.apiKey ?? ""), for: acct) }
+
+        var notes: [String] = []
+        let target = c.insert == true ? await ExternalTarget.open() : nil
+        if c.insert == true && target == nil { notes.append("could not open TextEdit") }
+        NSPasteboard.general.clearContents()
+
+        let start = Date()
+        let casesDir = URL(fileURLWithPath: value("--cases") ?? ".").deletingLastPathComponent()
+        let audioURL = c.audio.hasPrefix("/") ? URL(fileURLWithPath: c.audio) : casesDir.appendingPathComponent(c.audio)
+        let src = FileSource(url: audioURL, realtime: true)
+        let ctl = DictationController.shared
+        ctl.begin(source: src)
+        guard ctl.phase == .listening else {
+            return Result(name: c.name, passed: false, raw: "", final: "", seconds: 0, notes: ["did not start: \(ctl.phase)"])
+        }
+
+        // Grab the live HUD for the first case, mid-utterance.
+        if index == 0 {
+            try? await Task.sleep(for: .seconds(1.6))
+            snapshot(HUDController.shared.window, to: shots.appendingPathComponent("hud-live-listening.png"), backdrop: true)
+        }
+        await src.waitUntilDone()
+        let stoppedAt = Date()
+        // Safety: only send ⌘V if the test target really is frontmost.
+        let targetFocused = target?.isFrontmost ?? false
+        if target != nil && !targetFocused { notes.append("TextEdit not frontmost (\(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?")) — paste suppressed") }
+        let task = ctl.stop(insert: targetFocused || (c.insert == true && !AXIsProcessTrusted()))
+        if index == 0 {
+            try? await Task.sleep(for: .milliseconds(120))
+            snapshot(HUDController.shared.window, to: shots.appendingPathComponent("hud-live-processing.png"), backdrop: true)
+        }
+        let entry = await task?.value
+        let elapsed = Date().timeIntervalSince(stoppedAt)
+        _ = start
+        let final = entry?.finalText ?? ""
+        if let err = entry?.error { notes.append(err) }
+
+        let expectsError = c.expectContains == ["__expect_error__"]
+        var passed = expectsError ? (final.isEmpty && entry?.error != nil) : !final.isEmpty
+        for w in c.expectContains ?? [] where !expectsError && !final.localizedCaseInsensitiveContains(w) {
+            passed = false
+            notes.append("missing “\(w)”")
+        }
+        if c.cleanup != nil && !expectsError && entry?.cleanedText == nil {
+            passed = false
+            notes.append("cleanup did not run")
+        }
+        for w in c.expectNotContains ?? [] where final.localizedCaseInsensitiveContains(w) {
+            passed = false
+            notes.append("unexpected “\(w)”")
+        }
+
+        if c.insert == true && !AXIsProcessTrusted() {
+            // No Accessibility (e.g. CI): Murmur must fall back to the clipboard.
+            let clip = NSPasteboard.general.string(forType: .string) ?? ""
+            if !final.isEmpty && clip == final { notes.append("no Accessibility: copied-to-clipboard fallback ✓") }
+            else { passed = false; notes.append("clipboard was “\(clip)”") }
+            target?.close()
+        } else if c.insert == true {
+            if let target, targetFocused {
+                try? await Task.sleep(for: .milliseconds(700))
+                let typed = target.focusedText() ?? ""
+                if !final.isEmpty && typed.contains(final) { notes.append("pasted into TextEdit ✓ (read back via Accessibility)") }
+                else { passed = false; notes.append("TextEdit contained “\(typed)”") }
+                let clip = NSPasteboard.general.string(forType: .string) ?? ""
+                notes.append(clip.isEmpty ? "clipboard restored ✓" : "clipboard now “\(clip)”")
+                target.screenshot(to: shots.appendingPathComponent("insert-textedit.png"))
+            } else {
+                passed = false
+            }
+            target?.close()
+        }
+        // Let the HUD finish its exit animation before the next case.
+        try? await Task.sleep(for: .seconds(1.2))
+        log("  → \(passed ? "PASS" : "FAIL") \(String(format: "%.2fs after release", elapsed)) “\(final)” \(notes)")
+        return Result(name: c.name, passed: passed, raw: entry?.rawText ?? "", final: final, seconds: elapsed, notes: notes)
+    }
+
+    /// Priority resolution with the devices actually connected, then a real
+    /// 1.5 s capture from each one.
+    @MainActor private static func microphoneTests() async -> [Result] {
+        var out: [Result] = []
+        let mm = MicrophoneManager.shared
+        mm.refresh()
+        let devices = mm.devices
+        let saved = AppSettings.shared.config.microphones
+
+        if devices.count >= 2 {
+            var notes: [String] = []
+            var ok = true
+            let recs = devices.map { MicRecord(uid: $0.uid, name: $0.name) }
+            AppSettings.shared.config.microphones = recs
+            ok = ok && mm.candidates().first?.uid == recs[0].uid
+            notes.append("order A→ \(mm.candidates().first?.name ?? "-")")
+            AppSettings.shared.config.microphones = recs.reversed()
+            ok = ok && mm.candidates().first?.uid == recs.last!.uid
+            notes.append("order B→ \(mm.candidates().first?.name ?? "-")")
+            var disabled = Array(recs.reversed()); disabled[0].enabled = false
+            AppSettings.shared.config.microphones = disabled
+            ok = ok && mm.candidates().first?.uid == disabled[1].uid
+            notes.append("top disabled→ \(mm.candidates().first?.name ?? "-")")
+            var ghost = [MicRecord(uid: "disconnected-device", name: "Unplugged Mic")] + recs
+            ghost[0].enabled = true
+            AppSettings.shared.config.microphones = ghost
+            ok = ok && mm.candidates().first?.uid == recs[0].uid
+            notes.append("unplugged top→ \(mm.candidates().first?.name ?? "-")")
+            log("  → \(ok ? "PASS" : "FAIL") mic priority: \(notes)")
+            out.append(Result(name: "microphone priority resolution (\(devices.count) devices)", passed: ok, raw: "", final: "", seconds: 0, notes: notes))
+        }
+        AppSettings.shared.config.microphones = saved
+
+        // Never block CI on a permission dialog nobody can click.
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined && ProcessInfo.processInfo.environment["CI"] == nil {
+            log("requesting microphone permission — click Allow")
+            _ = await AVCaptureDevice.requestAccess(for: .audio)
+        }
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+            log("skip real capture: microphone permission not granted")
+            out.append(Result(name: "real microphone capture — skipped, no permission", passed: true, raw: "", final: "", seconds: 0, notes: []))
+            return out
+        }
+        // Failover: find a device that opens but stays silent (virtual / remote
+        // audio), put it first, and confirm dictation moves to a working mic.
+        var silent: InputDevice?
+        var working: InputDevice?
+        for d in devices {
+            let probe = MicrophoneSource(device: d)
+            guard (try? probe.start(recordingTo: nil)) != nil else { continue }
+            try? await Task.sleep(for: .milliseconds(700))
+            if probe.hasReceivedAudio { working = working ?? d } else { silent = silent ?? d }
+            _ = probe.stop()
+        }
+        if let silent, let working {
+            AppSettings.shared.config.microphones = [MicRecord(uid: silent.uid, name: silent.name), MicRecord(uid: working.uid, name: working.name)]
+            let ctl = DictationController.shared
+            ctl.begin()
+            try? await Task.sleep(for: .seconds(1.4))
+            let using = ctl.microphoneName ?? "-"
+            ctl.cancel(silently: true)
+            AppSettings.shared.config.microphones = saved
+            let ok = using == working.name
+            log("  → \(ok ? "PASS" : "FAIL") failover: \(silent.name) first → dictation used \(using)")
+            out.append(Result(name: "silent-device failover during dictation", passed: ok, raw: "", final: "", seconds: 0,
+                              notes: ["priority: \(silent.name), \(working.name)", "used: \(using)"]))
+        } else {
+            log("skip failover test: needs one silent and one working input device")
+        }
+
+        for device in devices {
+            let src = MicrophoneSource(device: device)
+            let peak = PeakBox()
+            src.onLevel = { peak.update($0) }
+            let name = "real capture · \(device.name)"
+            do {
+                let safe = device.name.replacingOccurrences(of: "[^A-Za-z0-9]+", with: "-", options: .regularExpression)
+                try src.start(recordingTo: outDir.appendingPathComponent("mic-\(safe).m4a"))
+            } catch {
+                out.append(Result(name: name, passed: false, raw: "", final: "", seconds: 0, notes: [error.localizedDescription]))
+                continue
+            }
+            try? await Task.sleep(for: .seconds(1.5))
+            let samples = src.stop()
+            let secs = Double(samples.count) / 16_000
+            let rms = samples.isEmpty ? 0 : sqrt(samples.reduce(0) { $0 + $1 * $1 } / Float(samples.count))
+            // A device that opens but never delivers audio is legitimate (virtual/remote
+            // devices); it's covered by the failover test, so report rather than fail.
+            if secs == 0 {
+                log("  → INFO \(name): opened but delivered no audio (handled by failover)")
+                out.append(Result(name: name + " — no audio (virtual device)", passed: true, raw: "", final: "", seconds: 0, notes: ["no buffers"]))
+                continue
+            }
+            let ok = secs > 1.2 && secs < 1.9 && rms > 0
+            let note = String(format: "captured %.2fs @16kHz, rms %.1f dBFS (non-zero samples ✓)", secs, 20 * log10(max(rms, 1e-9)))
+            log("  → \(ok ? "PASS" : "FAIL") \(name): \(note)")
+            out.append(Result(name: name, passed: ok, raw: "", final: "", seconds: secs, notes: [note]))
+        }
+        return out
+    }
+
+    // MARK: Screenshots
+
+    @MainActor private static func screenshots(to dir: URL) async {
+        for (scheme, appearance) in [("light", NSAppearance(named: .aqua)), ("dark", NSAppearance(named: .darkAqua))] {
+            NSApp.appearance = appearance
+            AppSettings.shared.config.cleanupEnabled = true
+            AppSettings.shared.config.vocabulary = [
+                VocabTerm(term: "Kubernetes", soundsLike: ["cooper netties"]),
+                VocabTerm(term: "JQ Reyes", soundsLike: ["jay queue reyes"]),
+                VocabTerm(term: "OpenRouter"),
+                VocabTerm(term: "SwiftUI", soundsLike: ["swift you eye"]),
+            ]
+            SettingsWindowController.shared.show(.home)
+            SettingsWindowController.shared.window?.setContentSize(NSSize(width: 960, height: 700))
+            SettingsWindowController.shared.window?.center()
+            for pane in Pane.allCases {
+                SettingsNavigation.shared.pane = pane
+                try? await Task.sleep(for: .milliseconds(900))
+                snapshot(SettingsWindowController.shared.window, to: dir.appendingPathComponent("\(scheme)-pane-\(pane.rawValue).png"))
+            }
+            SettingsWindowController.shared.window?.orderOut(nil)
+
+            let ctl = DictationController.shared
+            let wave: [Float] = (0..<DictationController.barCount).map { i in
+                Float(0.25 + 0.7 * abs(sin(Double(i) * 0.55)) * (0.6 + 0.4 * cos(Double(i) * 0.21)))
+            }
+            let states: [(String, () -> Void)] = [
+                ("listening", { ctl.debugSet(phase: .listening, partial: "Let's move the Kubernetes review to Wednesday and loop in", levels: wave) }),
+                ("handsfree", { ctl.debugSet(phase: .listening, partial: "", levels: wave, latched: true) }),
+                ("transcribing", { ctl.debugSet(phase: .processing("Transcribing"), partial: "Let's move the Kubernetes review to Wednesday.") }),
+                ("polishing", { ctl.debugSet(phase: .processing("Polishing")) }),
+                ("done", { ctl.debugSet(phase: .done("Let's move the Kubernetes review to Wednesday.")) }),
+                ("copied", { ctl.debugSet(phase: .copied) }),
+                ("error", { ctl.debugSet(phase: .error("Couldn't reach OpenRouter. Check your connection.")) }),
+            ]
+            for (name, apply) in states {
+                apply()
+                try? await Task.sleep(for: .milliseconds(700))
+                snapshot(HUDController.shared.window, to: dir.appendingPathComponent("\(scheme)-hud-\(name).png"), backdrop: true)
+            }
+            ctl.debugSet(phase: .hidden)
+            HUDController.shared.window?.orderOut(nil)
+        }
+        NSApp.appearance = nil
+    }
+
+    /// Real window capture when Screen Recording is granted; otherwise render
+    /// the view hierarchy in-process (no permission needed, materials flatter).
+    @MainActor @discardableResult
+    static func snapshot(_ window: NSWindow?, to url: URL, backdrop: Bool = false) -> Bool {
+        guard let window else { return false }
+        if CGPreflightScreenCaptureAccess() {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            if backdrop, let screen = window.screen {
+                // Capture the screen region so translucent glass is shown over the real desktop.
+                let f = window.frame
+                let top = screen.frame.maxY - f.maxY
+                p.arguments = ["-x", "-R", "\(Int(f.minX)),\(Int(top)),\(Int(f.width)),\(Int(f.height))", url.path]
+            } else {
+                p.arguments = ["-x", "-o", "-l", "\(window.windowNumber)", url.path]
+            }
+            try? p.run()
+            p.waitUntilExit()
+            if p.terminationStatus == 0 { return true }
+        }
+        guard let view = window.contentView?.superview ?? window.contentView else { return false }
+        view.layoutSubtreeIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        var image = NSImage(size: view.bounds.size)
+        image.addRepresentation(rep)
+        if backdrop {
+            // Composite onto a desktop-like backdrop so translucent HUD states are legible.
+            let composed = NSImage(size: view.bounds.size)
+            composed.lockFocus()
+            NSGradient(colors: [NSColor(calibratedRed: 0.20, green: 0.24, blue: 0.42, alpha: 1),
+                                NSColor(calibratedRed: 0.55, green: 0.38, blue: 0.62, alpha: 1),
+                                NSColor(calibratedRed: 0.93, green: 0.62, blue: 0.52, alpha: 1)])?
+                .draw(in: NSRect(origin: .zero, size: view.bounds.size), angle: -20)
+            image.draw(in: NSRect(origin: .zero, size: view.bounds.size))
+            composed.unlockFocus()
+            image = composed
+        }
+        guard let tiff = image.tiffRepresentation, let bmp = NSBitmapImageRep(data: tiff),
+              let png = bmp.representation(using: .png, properties: [:]) else { return false }
+        return (try? png.write(to: url)) != nil
+    }
+
+    /// "$NAME" → value of environment variable NAME (keeps secrets out of fixtures).
+    static func resolveEnv(_ s: String) -> String {
+        guard s.hasPrefix("$") else { return s }
+        return ProcessInfo.processInfo.environment[String(s.dropFirst())] ?? ""
+    }
+
+    static func log(_ s: String) {
+        FileHandle.standardError.write(Data("[e2e] \(s)\n".utf8))
+    }
+}
+
+/// A TextEdit document that dictation is pasted into during the insert test,
+/// exercising the real cross-app path (focus stays in another app, ⌘V via CGEvent).
+@MainActor
+final class ExternalTarget {
+    static let bundleID = "com.apple.TextEdit"
+    let app: NSRunningApplication
+    let file: URL
+    let launchedByUs: Bool
+
+    private init(app: NSRunningApplication, file: URL, launchedByUs: Bool) {
+        self.app = app; self.file = file; self.launchedByUs = launchedByUs
+    }
+
+    static func open() async -> ExternalTarget? {
+        let wasRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
+        let file = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("murmur-e2e-\(UUID().uuidString.prefix(6)).txt")
+        try? "".write(to: file, atomically: true, encoding: .utf8)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        p.arguments = ["-a", "TextEdit", file.path]
+        try? p.run()
+        p.waitUntilExit()
+        for _ in 0..<50 {
+            try? await Task.sleep(for: .milliseconds(100))
+            if let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier == bundleID {
+                try? await Task.sleep(for: .milliseconds(400))
+                return ExternalTarget(app: app, file: file, launchedByUs: !wasRunning)
+            }
+        }
+        return nil
+    }
+
+    var isFrontmost: Bool { NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier }
+
+    func focusedText() -> String? {
+        let ax = AXUIElementCreateApplication(app.processIdentifier)
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(ax, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+              let el = focused else { return nil }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el as! AXUIElement, kAXValueAttribute as CFString, &value) == .success else { return nil }
+        return value as? String
+    }
+
+    func screenshot(to url: URL) {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        guard let w = list.first(where: { ($0[kCGWindowOwnerPID as String] as? Int32) == app.processIdentifier && ($0[kCGWindowLayer as String] as? Int) == 0 }),
+              let num = w[kCGWindowNumber as String] as? Int else { return }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        p.arguments = ["-x", "-o", "-l", "\(num)", url.path]
+        try? p.run()
+        p.waitUntilExit()
+    }
+
+    func close() {
+        if launchedByUs { app.forceTerminate() }
+        try? FileManager.default.removeItem(at: file)
+    }
+}
+
+final class PeakBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var v: Float = 0
+    var value: Float { lock.lock(); defer { lock.unlock() }; return v }
+    func update(_ x: Float) { lock.lock(); v = max(v, x); lock.unlock() }
+}

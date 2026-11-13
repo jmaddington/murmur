@@ -1,0 +1,141 @@
+import AppKit
+import Carbon.HIToolbox
+
+/// Unified press/release events for either a bare modifier (fn, right ⌥ ...)
+/// or a regular shortcut (⌥Space ...). The controller turns these into
+/// push-to-talk (hold) or hands-free (quick tap) behaviour.
+@MainActor
+final class HotkeyManager {
+    static let shared = HotkeyManager()
+
+    var onPress: (() -> Void)?
+    var onRelease: (() -> Void)?
+    /// Another key was pressed while the trigger modifier was held — it's a chord, not dictation.
+    var onChord: (() -> Void)?
+    var onEscape: (() -> Void)?
+
+    private var monitors: [Any] = []
+    private var hotKeyRef: EventHotKeyRef?
+    private var handlerRef: EventHandlerRef?
+    private var modifierDown = false
+    private(set) var suspended = false
+
+    func install() {
+        uninstall()
+        let c = AppSettings.shared.config
+        switch c.triggerKind {
+        case .modifier: installModifier(c.triggerModifier)
+        case .shortcut: installShortcut(c.shortcut)
+        }
+        // Escape cancels; keyDown also detects chords for the modifier trigger.
+        let keyHandler: (NSEvent) -> Void = { [weak self] e in
+            guard let self else { return }
+            if e.keyCode == UInt16(kVK_Escape) { self.onEscape?() }
+            else if self.modifierDown { self.onChord?() }
+        }
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: keyHandler) { monitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { keyHandler($0); return $0 }) { monitors.append(m) }
+    }
+
+    /// Temporarily disable while the shortcut recorder is capturing keys.
+    func setSuspended(_ s: Bool) {
+        suspended = s
+        if s { uninstall() } else { install() }
+    }
+
+    func uninstall() {
+        monitors.forEach(NSEvent.removeMonitor)
+        monitors.removeAll()
+        if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
+        if let handlerRef { RemoveEventHandler(handlerRef) }
+        hotKeyRef = nil
+        handlerRef = nil
+        modifierDown = false
+    }
+
+    // MARK: Modifier
+
+    private func installModifier(_ mod: TriggerModifier) {
+        let handler: (NSEvent) -> Void = { [weak self] e in
+            guard let self, e.keyCode == mod.keyCode else { return }
+            let down = e.modifierFlags.contains(mod.flag)
+            if down && !self.modifierDown {
+                self.modifierDown = true
+                self.onPress?()
+            } else if !down && self.modifierDown {
+                self.modifierDown = false
+                self.onRelease?()
+            }
+        }
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: handler) { monitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { handler($0); return $0 }) { monitors.append(m) }
+    }
+
+    // MARK: Shortcut (Carbon — works without Accessibility)
+
+    private func installShortcut(_ combo: KeyCombo) {
+        var types = [
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
+        ]
+        let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+            let kind = GetEventKind(event)
+            MainActor.assumeIsolated {
+                if kind == UInt32(kEventHotKeyPressed) { HotkeyManager.shared.onPress?() }
+                else { HotkeyManager.shared.onRelease?() }
+            }
+            return noErr
+        }, 2, &types, nil, &handlerRef)
+        guard status == noErr else { return }
+        let id = EventHotKeyID(signature: OSType(0x4D524D52), id: 1) // 'MRMR'
+        RegisterEventHotKey(combo.keyCode, Self.carbonModifiers(combo.modifiers), id, GetApplicationEventTarget(), 0, &hotKeyRef)
+    }
+
+    static func carbonModifiers(_ raw: UInt) -> UInt32 {
+        let f = NSEvent.ModifierFlags(rawValue: raw)
+        var m: UInt32 = 0
+        if f.contains(.command) { m |= UInt32(cmdKey) }
+        if f.contains(.option) { m |= UInt32(optionKey) }
+        if f.contains(.control) { m |= UInt32(controlKey) }
+        if f.contains(.shift) { m |= UInt32(shiftKey) }
+        return m
+    }
+}
+
+extension KeyCombo {
+    var displayParts: [String] {
+        let f = NSEvent.ModifierFlags(rawValue: modifiers)
+        var parts: [String] = []
+        if f.contains(.control) { parts.append("⌃") }
+        if f.contains(.option) { parts.append("⌥") }
+        if f.contains(.shift) { parts.append("⇧") }
+        if f.contains(.command) { parts.append("⌘") }
+        parts.append(Self.keyName(keyCode))
+        return parts
+    }
+
+    static func keyName(_ code: UInt32) -> String {
+        let special: [Int: String] = [
+            kVK_Space: "Space", kVK_Return: "↩", kVK_Tab: "⇥", kVK_Delete: "⌫", kVK_Escape: "⎋",
+            kVK_ForwardDelete: "⌦", kVK_LeftArrow: "←", kVK_RightArrow: "→", kVK_UpArrow: "↑", kVK_DownArrow: "↓",
+            kVK_Home: "↖", kVK_End: "↘", kVK_PageUp: "⇞", kVK_PageDown: "⇟",
+            kVK_F1: "F1", kVK_F2: "F2", kVK_F3: "F3", kVK_F4: "F4", kVK_F5: "F5", kVK_F6: "F6",
+            kVK_F7: "F7", kVK_F8: "F8", kVK_F9: "F9", kVK_F10: "F10", kVK_F11: "F11", kVK_F12: "F12",
+            kVK_F13: "F13", kVK_F14: "F14", kVK_F15: "F15", kVK_F16: "F16", kVK_F17: "F17", kVK_F18: "F18", kVK_F19: "F19",
+        ]
+        if let s = special[Int(code)] { return s }
+        guard let src = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let ptr = TISGetInputSourceProperty(src, kTISPropertyUnicodeKeyLayoutData) else { return "#\(code)" }
+        let data = Unmanaged<CFData>.fromOpaque(ptr).takeUnretainedValue() as Data
+        var dead: UInt32 = 0
+        var chars = [UniChar](repeating: 0, count: 4)
+        var len = 0
+        let rc = data.withUnsafeBytes { raw -> OSStatus in
+            let layout = raw.baseAddress!.assumingMemoryBound(to: UCKeyboardLayout.self)
+            return UCKeyTranslate(layout, UInt16(code), UInt16(kUCKeyActionDisplay), 0, UInt32(LMGetKbdType()),
+                                  OptionBits(kUCKeyTranslateNoDeadKeysBit), &dead, 4, &len, &chars)
+        }
+        guard rc == noErr, len > 0 else { return "#\(code)" }
+        return String(utf16CodeUnits: chars, count: len).uppercased()
+    }
+}

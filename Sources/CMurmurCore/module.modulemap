@@ -1,0 +1,5 @@
+module CMurmurCore [system] {
+    header "../../core/include/murmur_core.h"
+    link "murmur_core"
+    export *
+}
