@@ -9,6 +9,13 @@ security create-keychain -p "$KC_PASS" "$KC"
 security set-keychain-settings -lut 21600 "$KC"
 security unlock-keychain -p "$KC_PASS" "$KC"
 
+# Apple's Developer ID intermediates: without them the identity is untrusted and
+# `find-identity -v` silently drops it.
+for ca in DeveloperIDG2CA DeveloperIDCA; do
+  curl -fsSL "https://www.apple.com/certificateauthority/$ca.cer" -o "$RUNNER_TEMP/$ca.cer" \
+    && security import "$RUNNER_TEMP/$ca.cer" -k "$KC" >/dev/null 2>&1 || true
+done
+
 import() {   # $1 = base64 p12, $2 = password
   local f="$RUNNER_TEMP/cert-$RANDOM.p12"
   echo "$1" | base64 --decode > "$f"
@@ -31,4 +38,11 @@ if [[ -n "${ASC_API_KEY_P8:-}" ]]; then
     echo "NOTARY_KEY_ID=$ASC_API_KEY_ID"
     echo "NOTARY_ISSUER=$ASC_API_ISSUER_ID"; } >> "$GITHUB_ENV"
 fi
-echo "Signing: ${APP_ID:-none} | Installer: ${PKG_ID:-none} | Notary: ${ASC_API_KEY_ID:-none}"
+SUMMARY="Developer ID Application: ${APP_ID:+found}${APP_ID:-MISSING} · Developer ID Installer: ${PKG_ID:+found}${PKG_ID:-MISSING} · Notary API key: ${ASC_API_KEY_ID:+set}${ASC_API_KEY_ID:-MISSING}"
+echo "$SUMMARY"
+echo "::notice title=Signing setup::$SUMMARY"
+if [[ -z "$APP_ID" ]]; then
+  echo "::group::Identities in signing keychain"; security find-identity "$KC"; echo "::endgroup::"
+  echo "::error title=No valid Developer ID Application identity::Check DEVELOPER_ID_APP_P12 / DEVELOPER_ID_APP_PASSWORD. Identities seen: $(security find-identity "$KC" | grep -c ')') (valid: 0)"
+  exit 1
+fi
