@@ -171,10 +171,10 @@
     ]
   },
   {
-    "name": "LIVE OpenRouter \u00b7 on-device transcription + Claude Haiku cleanup",
+    "name": "LIVE OpenRouter \u00b7 Gemini transcription + Claude Haiku cleanup",
     "requires_env": "OPENROUTER_API_KEY",
     "audio": "audio/cleanup.aiff",
-    "engine": "apple",
+    "engine": "openrouter",
     "cleanup": "openrouter",
     "api_key": "$OPENROUTER_API_KEY",
     "model": "anthropic/claude-haiku-4.5",
@@ -186,15 +186,13 @@
       "No wait",
       "Um"
     ],
-    "requires": [
-      "apple_speech"
-    ]
+    "transcribe_model": "google/gemini-2.5-flash"
   },
   {
     "name": "LIVE OpenRouter \u00b7 audio-aware cleanup (Gemini hears the recording)",
     "requires_env": "OPENROUTER_API_KEY",
     "audio": "audio/basic.aiff",
-    "engine": "apple",
+    "engine": "openrouter",
     "cleanup": "openrouter",
     "cleanup_sends_audio": true,
     "api_key": "$OPENROUTER_API_KEY",
@@ -203,9 +201,6 @@
       "design review",
       "Wednesday",
       "agenda"
-    ],
-    "requires": [
-      "apple_speech"
     ]
   }
 ]

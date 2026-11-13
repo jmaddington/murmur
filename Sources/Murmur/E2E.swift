@@ -34,6 +34,8 @@ enum E2E {
         var customUrl: String?
         var apiKey: String?
         var model: String?
+        /// Overrides `model` for the transcription step only.
+        var transcribeModel: String?
         var cleanupSendsAudio: Bool?
         var style: String?
         var requiresEnv: String?
@@ -160,6 +162,7 @@ enum E2E {
             cfg.openrouterTranscribeModel = m; cfg.openrouterCleanupModel = m
             cfg.customTranscribeModel = m; cfg.customCleanupModel = m
         }
+        if let m = c.transcribeModel { cfg.openrouterTranscribeModel = m; cfg.customTranscribeModel = m }
         AppSettings.shared.config = cfg
         if c.mock == true, let base = ProcessInfo.processInfo.environment["MURMUR_E2E_MOCK_BASE"] {
             setenv("MURMUR_OPENROUTER_BASE", base, 1)
