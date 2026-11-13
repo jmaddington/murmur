@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         observePhase()
 
         if E2E.isActive {
-            Task { await E2E.run() }
+            Task { Demo.isActive ? await Demo.run() : await E2E.run() }
             return
         }
 

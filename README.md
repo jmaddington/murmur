@@ -1,9 +1,50 @@
-# Murmur
+<p align="center"><img src="docs/media/icon.png" width="112" alt="Murmur icon"></p>
+<h1 align="center">Murmur</h1>
+<p align="center"><b>Hold a key, speak, let go: polished text appears wherever your cursor is.</b><br>
+Native macOS dictation with on-device or OpenRouter models, custom vocabulary and an LLM polish pass.</p>
+<p align="center">
+  <a href="https://github.com/jmaddington/murmur/releases/latest"><b>Download</b></a> ·
+  <a href="https://jmaddington.github.io/murmur/">Website</a> ·
+  <a href="https://jmaddington.github.io/murmur/media/demo.mp4">Demo video (with sound)</a>
+</p>
 
-An internal Wispr Flow–style dictation app for macOS 26+. Hold a key, talk, release — polished text appears wherever your cursor is.
+<p align="center"><img src="docs/media/demo.gif" width="720" alt="Murmur dictating three sentences into TextEdit: live preview, vocabulary correction (JQ Reyes, Kubernetes) and an LLM polish that applies a spoken self-correction"></p>
+<p align="center"><sub>Recorded from the real app by its own demo mode (<code>Murmur --e2e --demo</code>): on-device transcription, vocabulary correction, then Claude Haiku cleanup turning "um, Tuesday, no wait, Wednesday" into one clean sentence.</sub></p>
+
+<table>
+<tr>
+<td><img src="docs/media/hud-listening.png" alt="Listening with live preview"></td>
+<td><img src="docs/media/hud-polishing.png" alt="Polishing"></td>
+<td><img src="docs/media/hud-done.png" alt="Done"></td>
+</tr>
+<tr><td align="center"><sub>Live preview</sub></td><td align="center"><sub>Polishing</sub></td><td align="center"><sub>Typed for you</sub></td></tr>
+</table>
+
+<table>
+<tr>
+<td><img src="docs/media/home-light.png" alt="Home"></td>
+<td><img src="docs/media/home-dark.png" alt="Home, dark"></td>
+</tr>
+<tr>
+<td><img src="docs/media/transcription.png" alt="Transcription"></td>
+<td><img src="docs/media/cleanup.png" alt="Cleanup"></td>
+</tr>
+<tr>
+<td><img src="docs/media/vocabulary.png" alt="Vocabulary"></td>
+<td><img src="docs/media/history.png" alt="History"></td>
+</tr>
+</table>
+
+## Overview
+
+A dictation app for macOS 26+ on Apple silicon.
 
 - **Swift / SwiftUI / AppKit** — native UI, menu bar app, floating HUD, global hotkeys, audio capture, Apple's on-device `SpeechAnalyzer` and Foundation Models.
 - **Rust core** (`core/`) — vocabulary correction, prompt construction, WAV encoding, OpenRouter + OpenAI-compatible HTTP, on-disk history and retention. Linked as a static library behind a 3-function C ABI (`core/include/murmur_core.h`).
+
+## Install
+
+Download the signed, notarized **DMG** (drag to Applications) or **PKG** (Installer / MDM) from [Releases](https://github.com/jmaddington/murmur/releases/latest).
 
 ## Build & run
 
@@ -40,6 +81,8 @@ OPENROUTER_API_KEY=sk-or-… ./tests/e2e/run.sh   # + live OpenRouter cases
 The e2e harness (`Murmur --e2e`) runs synthesized speech through the real pipeline (HUD → analyzer → vocabulary → cleanup → insertion → history), talks to a mock OpenRouter/OpenAI server that validates the wire format, smoke-tests the real microphone if permitted, and captures screenshots of every pane and HUD state in light and dark mode. Output: `build/e2e/report.json`, `build/e2e/screenshots/`. Settings, Keychain items and history are isolated from your real ones.
 
 Real screenshots need Screen Recording for your terminal; otherwise the harness renders windows in-process.
+
+`Murmur --e2e --demo --out build/demo` records the product demo used above: it hides other apps, lays a backdrop over the desktop, dictates scripted audio into TextEdit through the real pipeline while `screencapture -v` records, and writes `demo.mov`, `timeline.json` (for mixing the voice back in with ffmpeg) and HUD stills.
 
 ## Releases, signing & installers
 

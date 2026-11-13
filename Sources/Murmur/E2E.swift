@@ -470,10 +470,13 @@ final class ExternalTarget {
         self.app = app; self.file = file; self.launchedByUs = launchedByUs
     }
 
-    static func open() async -> ExternalTarget? {
+    static func open(rtf: Bool = false) async -> ExternalTarget? {
         let wasRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
-        let file = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("murmur-e2e-\(UUID().uuidString.prefix(6)).txt")
-        try? "".write(to: file, atomically: true, encoding: .utf8)
+        let file = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("murmur-\(rtf ? "demo" : "e2e")-\(UUID().uuidString.prefix(6)).\(rtf ? "rtf" : "txt")")
+        // The demo uses rich text so pasted dictation picks up large, legible type.
+        let body = rtf ? #"{\rtf1\ansi\deff0{\fonttbl{\f0 HelveticaNeue;}}\pard\sl380\slmult1\f0\fs40 \par }"# : ""
+        try? body.write(to: file, atomically: true, encoding: .utf8)
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         p.arguments = ["-a", "TextEdit", file.path]
@@ -487,6 +490,17 @@ final class ExternalTarget {
             }
         }
         return nil
+    }
+
+    /// Move/resize the front document window (top-left-origin screen points).
+    func setFrame(_ r: CGRect) {
+        let ax = AXUIElementCreateApplication(app.processIdentifier)
+        var win: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(ax, kAXFocusedWindowAttribute as CFString, &win) == .success, let w = win else { return }
+        var origin = r.origin
+        var size = r.size
+        if let pos = AXValueCreate(.cgPoint, &origin) { AXUIElementSetAttributeValue(w as! AXUIElement, kAXPositionAttribute as CFString, pos) }
+        if let sz = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(w as! AXUIElement, kAXSizeAttribute as CFString, sz) }
     }
 
     var isFrontmost: Bool { NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier }
