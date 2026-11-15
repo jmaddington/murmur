@@ -21,9 +21,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          V="${{ github.event.inputs.version }}"
+          V="$INPUT_VERSION"
           [[ -z "$V" ]] && V="${GITHUB_REF_NAME#v}"
+          [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || { echo "::error title=Bad version::'$V' is not semver"; exit 1; }
           echo "VERSION=$V" >> "$GITHUB_ENV"
           echo "BUILD=${{ github.run_number }}" >> "$GITHUB_ENV"
 
@@ -51,6 +54,17 @@ jobs:
           ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
           ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
         run: scripts/ci/import-certs.sh
+
+      # AIDEV-NOTE: package.sh silently skips notarization/PKG signing without creds; a release must never ship that.
+      - name: Require full signing setup
+        run: |
+          missing=()
+          [[ -n "${MURMUR_INSTALLER_IDENTITY:-}" ]] || missing+=("Developer ID Installer identity")
+          [[ -n "${NOTARY_KEY_PATH:-}" ]] || missing+=("notary API key (ASC_API_KEY_*)")
+          if (( ${#missing[@]} )); then
+            echo "::error title=Incomplete signing setup::Missing: ${missing[*]}. Refusing to publish an unnotarized release."
+            exit 1
+          fi
 
       - name: Build, sign, package, notarize
         timeout-minutes: 30
