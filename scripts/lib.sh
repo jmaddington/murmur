@@ -26,18 +26,19 @@ annotate() {
 
 # notarize FILE — submit, wait, staple; on rejection annotate Apple's issue log.
 notarize() {
-  local f=$1 out id status
+  # AIDEV-NOTE: never name a var `status` here; it is read-only in zsh (alias of $?) and aborts the function.
+  local f=$1 out id nstatus
   out=$(xcrun notarytool submit "$f" --key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
         --wait --timeout 30m --output-format json 2>&1) || true
   # notarytool prints plain text (not JSON) on auth/config errors; never let parsing abort the script.
   id=$(print -r -- "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)
-  status=$(print -r -- "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
-  print "  notarization ${id:-?}: ${status:-unknown}"
-  if [[ "$status" != "Accepted" ]]; then
+  nstatus=$(print -r -- "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
+  print "  notarization ${id:-?}: ${nstatus:-unknown}"
+  if [[ "$nstatus" != "Accepted" ]]; then
     local log=""
     [[ -n "$id" ]] && log=$(xcrun notarytool log "$id" --key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" 2>&1 | tail -40)
     print -r -- "$out"; print -r -- "$log"
-    annotate error "Notarization of ${f:t} ${status:-failed}" "$out
+    annotate error "Notarization of ${f:t} ${nstatus:-failed}" "$out
 $log"
     return 1
   fi
