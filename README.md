@@ -111,9 +111,23 @@ Without them you get ad-hoc / unsigned artifacts, which are fine for local testi
 ### GitHub Actions
 
 - **CI** (`.github/workflows/ci.yml`): every push and PR runs Rust tests, the e2e suite and an unsigned packaging smoke test. The report and screenshots are uploaded as an artifact. Cases that need Apple Intelligence or Accessibility skip themselves on hosted runners.
-- **Release** (`.github/workflows/release.yml`): pushing a `v*` tag (or a manual run) imports certificates into a temporary keychain, tests, builds, signs, packages, notarizes, and attaches everything to a GitHub Release.
+- **Release** (`.github/workflows/release.yml`): pushing a `v*` tag (or a manual run) imports certificates into a temporary keychain, tests, builds, signs, packages, notarizes, and attaches everything to a GitHub Release. The job refuses to publish if the installer cert or notary key is missing, so a release is always fully signed and notarized.
 
-Repository secrets for releases, all scoped to a `release` environment:
+Cutting a release:
+
+```sh
+git tag v1.2.0 && git push origin v1.2.0
+```
+
+Or run **Release** from the Actions tab with a semver version (e.g. `1.2.0`). The build number is the workflow run number. When the job succeeds the release appears under [Releases](https://github.com/jmaddington/murmur/releases) with its notes generated automatically.
+
+Troubleshooting:
+
+- **`Notary API key rejected … 403 … A required agreement is missing or has expired`**: Apple has an updated agreement waiting. The Account Holder accepts it at [developer.apple.com/account](https://developer.apple.com/account) and in App Store Connect › Business. Access can take about 10 minutes to return; check with `xcrun notarytool history` before re-running.
+- **Re-running a failed job** rebuilds the tag's original commit. To ship a fix, push a new tag (or move the tag if that version was never published).
+- Failures raise public annotations (shown on the run summary) with the failing tool's output and Apple's notarization log.
+
+Repository secrets for releases (the job runs in the `release` environment, so you can add protection rules there):
 
 | Secret | What |
 |---|---|
