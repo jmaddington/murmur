@@ -177,6 +177,8 @@ struct Config: Codable {
 
     // Behaviour
     var playSounds = true
+    var soundStyle: SoundStyle = .murmur
+    var soundVolume: Double = 0.6
     var restoreClipboard = true
     var hasOnboarded = false
 
@@ -196,7 +198,7 @@ struct Config: Codable {
         d(.customCleanupModel, &customCleanupModel); d(.cleanupStyle, &cleanupStyle)
         d(.cleanupUsesAppContext, &cleanupUsesAppContext); d(.vocabulary, &vocabulary)
         d(.audioRetentionDays, &audioRetentionDays); d(.transcriptRetentionDays, &transcriptRetentionDays)
-        d(.playSounds, &playSounds); d(.restoreClipboard, &restoreClipboard); d(.hasOnboarded, &hasOnboarded)
+        d(.playSounds, &playSounds); d(.soundStyle, &soundStyle); d(.soundVolume, &soundVolume); d(.restoreClipboard, &restoreClipboard); d(.hasOnboarded, &hasOnboarded)
     }
 }
 
@@ -220,6 +222,36 @@ final class AppSettings {
         } else {
             config = Config()
         }
+    }
+
+    // Collection edits driven by the UI go through these helpers. They edit a
+    // copy and assign it back in one step, so a predicate (or anything it
+    // captures, e.g. a SwiftUI row Binding that reads `config`) can never read
+    // `config` while it is being modified — `config.vocabulary.removeAll { … }`
+    // with such a predicate is an exclusivity violation that aborts the app.
+
+    func removeVocabulary(where shouldRemove: (VocabTerm) -> Bool) {
+        var list = config.vocabulary
+        list.removeAll(where: shouldRemove)
+        config.vocabulary = list
+    }
+
+    func removeMicrophones(where shouldRemove: (MicRecord) -> Bool) {
+        var list = config.microphones
+        list.removeAll(where: shouldRemove)
+        config.microphones = list
+    }
+
+    func moveMicrophones(fromOffsets source: IndexSet, toOffset destination: Int) {
+        var list = config.microphones
+        // Hand-rolled (no SwiftUI import here); same semantics as Array.move(fromOffsets:toOffset:).
+        let valid = source.filter { list.indices.contains($0) }
+        guard !valid.isEmpty, (0...list.count).contains(destination) else { return }
+        let moving = valid.map { list[$0] }
+        let insertAt = destination - valid.filter { $0 < destination }.count
+        for i in valid.reversed() { list.remove(at: i) }
+        list.insert(contentsOf: moving, at: insertAt)
+        config.microphones = list
     }
 
     private func save() {

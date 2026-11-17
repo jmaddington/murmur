@@ -391,8 +391,32 @@ struct ShortcutPane: View {
                     HowRow(symbol: "hand.tap.fill", title: "Hands-free", detail: "Tap the key once to keep listening. Tap again to finish.")
                     HowRow(symbol: "escape", title: "Cancel", detail: "Press esc at any time to discard the recording.")
                 }
-                Section("Behavior") {
+                Section("Sounds") {
                     Toggle("Play sounds", isOn: $settings.config.playSounds)
+                    if settings.config.playSounds {
+                        Picker("Style", selection: $settings.config.soundStyle) {
+                            ForEach(SoundStyle.allCases) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        LabeledContent("Volume") {
+                            HStack(spacing: 8) {
+                                Image(systemName: "speaker.fill").foregroundStyle(.secondary).font(.system(size: 11))
+                                Slider(value: $settings.config.soundVolume, in: 0.1...1)
+                                Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary).font(.system(size: 11))
+                            }
+                            .frame(maxWidth: 240)
+                        }
+                        LabeledContent("Preview") {
+                            HStack(spacing: 6) {
+                                ForEach([(Sound.Kind.start, "Start"), (.stop, "Stop"), (.done, "Typed"), (.cancel, "Cancel"), (.error, "Error")], id: \.0) { kind, label in
+                                    Button(label) { Sound.play(kind, force: true) }
+                                        .controlSize(.small)
+                                }
+                            }
+                        }
+                    }
+                }
+                Section("Behavior") {
                     Toggle("Restore clipboard after pasting", isOn: $settings.config.restoreClipboard)
                     Toggle("Open at login", isOn: $launchAtLogin)
                         .onChange(of: launchAtLogin) { _, v in settings.launchAtLogin = v }

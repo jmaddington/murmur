@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private var statusItem: NSStatusItem!
+    private var axTimer: Timer?
+    fileprivate var lastAXState = TextInserter.hasAccessibility
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -28,9 +30,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         DictationController.shared.install()
         prewarm()
+        Sound.preload()
         if !AppSettings.shared.config.hasOnboarded {
             AppSettings.shared.config.hasOnboarded = true
             SettingsWindowController.shared.show(.home)
+            // Ask straight away: without Accessibility, Murmur can only copy.
+            AccessibilityPrompt.requestOncePerLaunch()
+        }
+        // Keep the menu bar badge in sync with the Accessibility grant.
+        axTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard let d = NSApp.delegate as? AppDelegate else { return }
+                let trusted = TextInserter.hasAccessibility
+                if trusted != d.lastAXState { d.lastAXState = trusted; d.updateIcon() }
+            }
         }
     }
 
@@ -71,6 +84,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        if !TextInserter.hasAccessibility {
+            let ax = NSMenuItem(title: "Allow Accessibility… (needed to type)", action: #selector(grantAccessibility), keyEquivalent: "")
+            ax.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
+            menu.addItem(ax)
+            menu.addItem(.separator())
+        }
         let listening = DictationController.shared.phase == .listening
         let toggle = NSMenuItem(title: listening ? "Finish Dictation" : "Start Dictation",
                                 action: #selector(toggleDictation), keyEquivalent: "")
@@ -96,6 +115,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for item in menu.items where item.action != #selector(NSApplication.terminate(_:)) { item.target = self }
     }
 
+    @objc private func grantAccessibility() {
+        TextInserter.requestAccessibility()
+        Permissions.openPrivacy("Privacy_Accessibility")
+    }
+
     @objc private func toggleDictation() { DictationController.shared.toggleFromMenu() }
     @objc private func openSettings() { SettingsWindowController.shared.show() }
     @objc private func copyEntry(_ sender: NSMenuItem) {
@@ -115,13 +139,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func updateIcon() {
+    fileprivate func updateIcon() {
         let symbol: String = switch DictationController.shared.phase {
         case .listening: "waveform.circle.fill"
         case .processing: "ellipsis.circle"
-        default: "waveform"
+        default: TextInserter.hasAccessibility ? "waveform" : "waveform.badge.exclamationmark"
         }
         let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "Murmur")
+            ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: "Murmur")
         img?.isTemplate = true
         statusItem?.button?.image = img
     }

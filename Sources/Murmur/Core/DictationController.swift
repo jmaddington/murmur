@@ -2,12 +2,25 @@ import AVFoundation
 import AppKit
 import Observation
 
+enum CopyReason: Equatable {
+    case noAccessibility
+    case secureInput(app: String?)
+
+    var message: String {
+        switch self {
+        case .noAccessibility: "Copied — allow Accessibility to type for you"
+        case .secureInput(let app): "Copied — \(app ?? "an app") has secure input on. Press ⌘V"
+        }
+    }
+}
+
 enum HUDPhase: Equatable {
     case hidden
     case listening
     case processing(String)
     case done(String)
-    case copied
+    /// Text is on the clipboard but couldn't be typed.
+    case copied(CopyReason)
     case error(String)
 }
 
@@ -35,7 +48,8 @@ final class DictationController {
     private var config: PipelineConfig?
     private var entryID = ""
     private var audioURL: URL?
-    private var pressedAt = Date.distantPast
+    /// Event timestamp (seconds since boot) of the trigger press.
+    private var pressedAt: TimeInterval = 0
     private var hideTask: Task<Void, Never>?
     private var maxTimer: Task<Void, Never>?
     private var smoothed: Float = 0
@@ -44,27 +58,30 @@ final class DictationController {
 
     func install() {
         let hk = HotkeyManager.shared
-        hk.onPress = { [weak self] in self?.triggerDown() }
-        hk.onRelease = { [weak self] in self?.triggerUp() }
+        hk.onPress = { [weak self] t in self?.triggerDown(at: t) }
+        hk.onRelease = { [weak self] t in self?.triggerUp(at: t) }
         hk.onChord = { [weak self] in self?.chord() }
         hk.onEscape = { [weak self] in self?.escape() }
         hk.install()
     }
 
-    private func triggerDown() {
+    private func triggerDown(at time: TimeInterval) {
         switch phase {
         case .listening where latched: stop()
         case .listening: break
         default:
             guard !busy else { return }
-            pressedAt = Date()
+            pressedAt = time
             begin()
         }
     }
 
-    private func triggerUp() {
+    private func triggerUp(at time: TimeInterval) {
         guard phase == .listening, !latched else { return }
-        if Date().timeIntervalSince(pressedAt) < Self.tapThreshold {
+        // Measured between the two key events themselves: begin() blocks the
+        // main thread while the audio hardware opens, so the release is often
+        // *handled* well after the tap threshold even for a quick tap.
+        if time - pressedAt < Self.tapThreshold {
             latched = true // quick tap → hands-free until the next tap
         } else {
             stop()
@@ -73,7 +90,7 @@ final class DictationController {
 
     private func chord() {
         // fn+arrow, ⌥+letter etc. — the user wasn't trying to dictate.
-        if phase == .listening, !latched, Date().timeIntervalSince(pressedAt) < 1.5 { cancel(silently: true) }
+        if phase == .listening, !latched, ProcessInfo.processInfo.systemUptime - pressedAt < 1.5 { cancel(silently: true) }
     }
 
     private func escape() {
@@ -81,13 +98,18 @@ final class DictationController {
     }
 
     func toggleFromMenu() {
-        if phase == .listening { stop() } else if !busy { latched = true; begin() }
+        if phase == .listening { stop() } else if !busy { begin(handsFree: true) }
     }
 
     // MARK: Capture
 
-    func begin(source injected: AudioSource? = nil) {
+    func begin(source injected: AudioSource? = nil, handsFree: Bool = false) {
+        guard phase != .listening, !busy else { return }
         hideTask?.cancel()
+        // Only a dictation that actually starts may be latched; a stale flag
+        // from a start that failed would turn the next push-to-talk hold into
+        // hands-free mode (release would no longer stop it).
+        latched = false
         if injected == nil {
             switch AVCaptureDevice.authorizationStatus(for: .audio) {
             case .authorized: break
@@ -116,8 +138,11 @@ final class DictationController {
         smoothed = 0
 
         let session = cfg.makeSession()
-        session.onPartial = { [weak self] text in
-            guard let self, self.phase == .listening || self.phase == .processing("Transcribing") else { return }
+        session.onPartial = { [weak self, weak session] text in
+            // Late partials from a previous (cancelled / finished) session must
+            // not show up in the preview of the dictation that replaced it.
+            guard let self, let session, self.session === session,
+                  self.phase == .listening || self.phase == .processing("Transcribing") else { return }
             self.partial = text
         }
         self.session = session
@@ -128,6 +153,10 @@ final class DictationController {
         let started = startNextSource(session: session, lastError: &lastError)
         guard let started else {
             session.cancel()
+            self.session = nil
+            // Don't leave an empty folder / header-only audio file behind in History.
+            if let audioURL { try? FileManager.default.removeItem(at: audioURL.deletingLastPathComponent()) }
+            audioURL = nil
             show(.error(lastError?.localizedDescription ?? "No microphone available."), hideAfter: 3)
             return
         }
@@ -135,7 +164,7 @@ final class DictationController {
         microphoneName = started.deviceName
         if injected == nil { watchForSilentDevice(started) }
         startedAt = Date()
-        if injected != nil { latched = true }
+        latched = handsFree || injected != nil
         phase = .listening
         HUDController.shared.present()
         Sound.play(.start)
@@ -213,8 +242,11 @@ final class DictationController {
         source = nil
         session = nil
         latched = false
+        // Forget the folder once it's gone: `audioURL` must never outlive its
+        // dictation, or a later cancel would delete a saved history entry.
         if let audioURL { try? FileManager.default.removeItem(at: audioURL.deletingLastPathComponent()) }
-        if silently { phase = .hidden; HUDController.shared.dismiss() } else { show(.error("Cancelled"), hideAfter: 0.8) }
+        audioURL = nil
+        if silently { phase = .hidden; HUDController.shared.dismiss() } else { Sound.play(.cancel); show(.error("Cancelled"), hideAfter: 0.8) }
     }
 
     // MARK: Pipeline
@@ -238,6 +270,7 @@ final class DictationController {
         phase = .processing("Transcribing")
         let id = entryID
         let audioURL = self.audioURL
+        self.audioURL = nil // now owned by the history entry
         let mic = microphoneName
 
         return Task { [weak self] in
@@ -273,12 +306,22 @@ final class DictationController {
                 HistoryStore.shared.save(entry)
                 if insert {
                     let outcome = await TextInserter.insert(text, restoreClipboard: AppSettings.shared.config.restoreClipboard)
-                    self.show(outcome == .pasted ? .done(text) : .copied, hideAfter: outcome == .pasted ? 0.9 : 2.2)
+                    switch outcome {
+                    case .pasted:
+                        Sound.play(.done)
+                        self.show(.done(text), hideAfter: 0.9)
+                    case .noAccessibility:
+                        self.show(.copied(.noAccessibility), hideAfter: 6)
+                        AccessibilityPrompt.requestOncePerLaunch()
+                    case .secureInput(let app):
+                        self.show(.copied(.secureInput(app: app)), hideAfter: 4)
+                    }
                 } else {
                     self.show(.done(text), hideAfter: 0.9)
                 }
                 return entry
             } catch {
+                session.cancel() // release the analyzer / results stream of a failed session
                 entry.error = error.localizedDescription
                 HistoryStore.shared.save(entry)
                 self.show(.error(error.localizedDescription), hideAfter: 4)
@@ -307,9 +350,10 @@ final class DictationController {
                 session.append(buf)
                 i += n
             }
-            var text = RustCore.applyVocabulary(try await session.finish(samples: samples), cfg.vocabulary)
+            let raw = try await session.finish(samples: samples)
+            var text = RustCore.applyVocabulary(raw, cfg.vocabulary)
             var updated = entry
-            updated.rawText = text
+            updated.rawText = raw
             if cfg.cleanupEnabled, !text.isEmpty,
                let cleaned = try? await Cleanup.run(text, config: cfg, samples: samples) {
                 text = RustCore.applyVocabulary(cleaned, cfg.vocabulary)
@@ -352,17 +396,64 @@ final class DictationController {
     }
 }
 
+/// Ask for Accessibility with the system prompt, at most once per launch.
+@MainActor
+enum AccessibilityPrompt {
+    private static var asked = false
+    static func requestOncePerLaunch() {
+        guard !asked, !TextInserter.hasAccessibility else { return }
+        asked = true
+        TextInserter.requestAccessibility()
+    }
+}
+
+enum SoundStyle: String, Codable, CaseIterable, Identifiable {
+    case murmur, system
+    var id: String { rawValue }
+    var label: String { self == .murmur ? "Murmur" : "System" }
+}
+
+/// UI sounds. The Murmur set is synthesized by scripts/make-sounds.swift and
+/// bundled in Resources/Sounds; players are preloaded so playback is instant.
+@MainActor
 enum Sound {
-    enum Kind { case start, stop, error }
-    @MainActor static func play(_ k: Kind) {
-        guard AppSettings.shared.config.playSounds else { return }
-        let name: NSSound.Name = switch k {
-        case .start: "Tink"
-        case .stop: "Pop"
-        case .error: "Basso"
+    enum Kind: String, CaseIterable { case start, stop, done, error, cancel }
+
+    private static var players: [Kind: AVAudioPlayer] = [:]
+
+    static func preload() {
+        for k in Kind.allCases where players[k] == nil {
+            guard let url = Bundle.main.url(forResource: k.rawValue, withExtension: "wav", subdirectory: "Sounds")
+                    ?? Bundle.main.url(forResource: k.rawValue, withExtension: "wav"),
+                  let p = try? AVAudioPlayer(contentsOf: url) else { continue }
+            p.prepareToPlay()
+            players[k] = p
         }
-        guard let s = NSSound(named: name)?.copy() as? NSSound else { return }
-        s.volume = k == .error ? 0.35 : 0.22
-        s.play()
+    }
+
+    static func play(_ k: Kind, force: Bool = false) {
+        let c = AppSettings.shared.config
+        guard force || c.playSounds else { return }
+        switch c.soundStyle {
+        case .murmur:
+            preload()
+            if let p = players[k] {
+                p.volume = Float(c.soundVolume)
+                p.currentTime = 0
+                p.play()
+                return
+            }
+            fallthrough // bundle missing (e.g. bare binary): use the system set
+        case .system:
+            let name: NSSound.Name? = switch k {
+            case .start: "Tink"
+            case .stop: "Pop"
+            case .error: "Basso"
+            case .done, .cancel: nil
+            }
+            guard let name, let s = NSSound(named: name)?.copy() as? NSSound else { return }
+            s.volume = Float(c.soundVolume) * (k == .error ? 0.6 : 0.4)
+            s.play()
+        }
     }
 }

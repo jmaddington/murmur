@@ -121,6 +121,7 @@ enum E2E {
             }
         }
 
+        results.append(settingsMutationTest())
         results.append(contentsOf: await microphoneTests())
 
         if args.contains("--screenshots") {
@@ -246,6 +247,45 @@ enum E2E {
         try? await Task.sleep(for: .seconds(1.2))
         log("  → \(passed ? "PASS" : "FAIL") \(String(format: "%.2fs after release", elapsed)) “\(final)” \(notes)")
         return Result(name: c.name, passed: passed, raw: entry?.rawText ?? "", final: final, seconds: elapsed, notes: notes)
+    }
+
+    /// Regression: deleting a vocabulary term from Settings aborted the app with a
+    /// Swift exclusivity violation, because the delete predicate read a SwiftUI
+    /// Binding into `AppSettings.config` while `config` was being modified. Drive
+    /// the same store helpers the panes use with exactly such predicates; a
+    /// regression here kills the process (→ non-zero exit) rather than failing softly.
+    @MainActor private static func settingsMutationTest() -> Result {
+        let settings = AppSettings.shared
+        let saved = settings.config
+        defer { settings.config = saved }
+        var notes: [String] = []
+        var ok = true
+        func check(_ cond: Bool, _ what: String) { if !cond { ok = false; notes.append("FAILED: \(what)") } }
+
+        settings.config.vocabulary = [VocabTerm(term: "Alpha"), VocabTerm(term: "Beta", soundsLike: ["beater"]), VocabTerm(term: "Gamma")]
+        let bindable = Bindable(settings)
+        let row: Binding<VocabTerm> = bindable.config.vocabulary[1]
+        settings.removeVocabulary { $0.id == row.wrappedValue.id }
+        check(settings.config.vocabulary.map(\.term) == ["Alpha", "Gamma"], "vocabulary delete → \(settings.config.vocabulary.map(\.term))")
+        notes.append("vocabulary delete with a binding-reading predicate ✓")
+
+        settings.config.microphones = ["a", "b", "c", "d"].map { MicRecord(uid: $0, name: $0.uppercased()) }
+        let mic: Binding<MicRecord> = bindable.config.microphones[0]
+        settings.removeMicrophones { $0.uid == mic.wrappedValue.uid }
+        check(settings.config.microphones.map(\.uid) == ["b", "c", "d"], "microphone forget → \(settings.config.microphones.map(\.uid))")
+        settings.moveMicrophones(fromOffsets: IndexSet(integer: 0), toOffset: 3)
+        check(settings.config.microphones.map(\.uid) == ["c", "d", "b"], "move down → \(settings.config.microphones.map(\.uid))")
+        settings.moveMicrophones(fromOffsets: IndexSet(integer: 2), toOffset: 0)
+        check(settings.config.microphones.map(\.uid) == ["b", "c", "d"], "move up → \(settings.config.microphones.map(\.uid))")
+        var expected = settings.config.microphones
+        expected.move(fromOffsets: IndexSet([0, 2]), toOffset: 2)
+        settings.moveMicrophones(fromOffsets: IndexSet([0, 2]), toOffset: 2)
+        check(settings.config.microphones == expected, "multi-move → \(settings.config.microphones.map(\.uid))")
+        notes.append("microphone forget / reorder ✓")
+
+        log("  → \(ok ? "PASS" : "FAIL") settings list edits: \(notes)")
+        return Result(name: "settings · delete vocabulary term / forget & reorder microphones (exclusivity regression)",
+                      passed: ok, raw: "", final: "", seconds: 0, notes: notes)
     }
 
     /// Priority resolution with the devices actually connected, then a real
@@ -389,7 +429,8 @@ enum E2E {
                 ("transcribing", { ctl.debugSet(phase: .processing("Transcribing"), partial: "Let's move the Kubernetes review to Wednesday.") }),
                 ("polishing", { ctl.debugSet(phase: .processing("Polishing")) }),
                 ("done", { ctl.debugSet(phase: .done("Let's move the Kubernetes review to Wednesday.")) }),
-                ("copied", { ctl.debugSet(phase: .copied) }),
+                ("copied-accessibility", { ctl.debugSet(phase: .copied(.noAccessibility)) }),
+                ("copied-secure-input", { ctl.debugSet(phase: .copied(.secureInput(app: "iTerm2"))) }),
                 ("error", { ctl.debugSet(phase: .error("Couldn't reach OpenRouter. Check your connection.")) }),
             ]
             for (name, apply) in states {

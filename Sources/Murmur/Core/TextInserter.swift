@@ -1,8 +1,26 @@
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 
 enum TextInserter {
-    enum Outcome { case pasted, copiedOnly }
+    enum Outcome: Equatable {
+        case pasted
+        /// Accessibility isn't granted, so Murmur can't send ⌘V.
+        case noAccessibility
+        /// Another app holds secure keyboard input (e.g. iTerm2's Secure Keyboard
+        /// Entry, a password field) and macOS would drop the synthetic ⌘V.
+        case secureInput(app: String?)
+    }
+
+    /// True while any process has secure event input enabled.
+    static var secureInputActive: Bool { IsSecureEventInputEnabled() }
+
+    /// Name of the app holding secure input, when the session reports it.
+    static var secureInputOwner: String? {
+        guard let dict = CGSessionCopyCurrentDictionary() as? [String: Any],
+              let pid = (dict["kCGSSessionSecureInputPID"] as? NSNumber)?.int32Value, pid > 0 else { return nil }
+        return NSRunningApplication(processIdentifier: pid)?.localizedName
+    }
 
     static var hasAccessibility: Bool { AXIsProcessTrusted() }
 
@@ -16,10 +34,17 @@ enum TextInserter {
     @MainActor
     static func insert(_ text: String, restoreClipboard: Bool) async -> Outcome {
         let pb = NSPasteboard.general
-        let saved: [[NSPasteboard.PasteboardType: Data]] = restoreClipboard
+        // Per item, the representations in their original order: the order is
+        // the source app's fidelity preference, and a Dictionary would both
+        // shuffle it and trap on a repeated type.
+        let saved: [[(NSPasteboard.PasteboardType, Data)]] = restoreClipboard
             ? (pb.pasteboardItems ?? []).map { item in
-                Dictionary(uniqueKeysWithValues: item.types.compactMap { t in item.data(forType: t).map { (t, $0) } })
-            }
+                var seen = Set<NSPasteboard.PasteboardType>()
+                return item.types.compactMap { t in
+                    guard seen.insert(t).inserted, let d = item.data(forType: t) else { return nil }
+                    return (t, d)
+                }
+            }.filter { !$0.isEmpty }
             : []
 
         pb.clearContents()
@@ -31,7 +56,10 @@ enum TextInserter {
         pb.writeObjects([item])
         let ourChange = pb.changeCount
 
-        guard hasAccessibility else { return .copiedOnly }
+        guard hasAccessibility else { return .noAccessibility }
+        // Secure input silently swallows injected keystrokes; leave the text on
+        // the clipboard and say so rather than pretend it was typed.
+        if secureInputActive { return .secureInput(app: secureInputOwner) }
 
         postCommandV()
 
@@ -41,9 +69,9 @@ enum TextInserter {
             if pb.changeCount == ourChange {
                 pb.clearContents()
                 if !saved.isEmpty {
-                    let items = saved.map { dict -> NSPasteboardItem in
+                    let items = saved.map { reps -> NSPasteboardItem in
                         let i = NSPasteboardItem()
-                        for (t, d) in dict { i.setData(d, forType: t) }
+                        for (t, d) in reps { i.setData(d, forType: t) }
                         return i
                     }
                     pb.writeObjects(items)

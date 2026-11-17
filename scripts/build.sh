@@ -37,6 +37,8 @@ if [[ ! -f build/AppIcon.icns || scripts/make-icon.swift -nt build/AppIcon.icns 
   iconutil -c icns build/AppIcon.iconset -o build/AppIcon.icns
 fi
 cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# UI sounds (regenerate with: swift scripts/make-sounds.swift Resources/Sounds)
+cp -R Resources/Sounds "$APP/Contents/Resources/Sounds"
 
 # Prefer an explicit identity, then any Developer ID in the keychain, else ad-hoc.
 IDENTITY=${MURMUR_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Developer ID Application/ {print $2; exit}')}

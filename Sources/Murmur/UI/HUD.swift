@@ -137,8 +137,8 @@ struct HUDView: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white, .green)
                 .symbolEffect(.bounce, value: controller.phase)
-        case .copied:
-            Image(systemName: "doc.on.clipboard.fill")
+        case .copied(let reason):
+            Image(systemName: reason == .noAccessibility ? "hand.raised.fill" : "lock.fill")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white)
         case .error:
@@ -162,10 +162,13 @@ struct HUDView: View {
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.9))
                 .contentTransition(.numericText())
-        case .copied:
-            Text("Copied — press ⌘V")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+        case .copied(let reason):
+            Text(reason.message)
+                .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white)
+                .lineLimit(2)
+                .frame(maxWidth: 330)
+                .fixedSize(horizontal: false, vertical: true)
         case .error(let msg):
             Text(msg)
                 .font(.system(size: 12.5, weight: .medium))
@@ -193,6 +196,20 @@ struct HUDView: View {
                     HUDButton(symbol: "stop.fill", prominent: true, help: "Finish") { controller.stop() }
                 }
             }
+            .transition(.opacity)
+        } else if controller.phase == .copied(.noAccessibility) {
+            Button {
+                TextInserter.requestAccessibility()
+                Permissions.openPrivacy("Privacy_Accessibility")
+            } label: {
+                Text("Allow…")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 10)
+                    .frame(height: 24)
+                    .background(Capsule().fill(.white))
+            }
+            .buttonStyle(.plain)
             .transition(.opacity)
         }
     }
