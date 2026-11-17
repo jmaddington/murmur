@@ -49,11 +49,16 @@ struct MicrophonesPane: View {
             Form {
                 Section {
                     List {
-                        ForEach(Array($settings.config.microphones.enumerated()), id: \.element.id) { idx, $mic in
-                            MicRow(mic: $mic, rank: idx + 1, connected: mics.isConnected(mic.uid),
-                                   active: mic.uid == activeUID, onForget: { forget(mic) })
+                        // Rows get plain values plus an id-keyed binding: an index-based
+                        // projection of `$settings.config.microphones` goes stale (and traps
+                        // out of range) once a row is forgotten, and reading one inside a
+                        // mutation of `config` is an exclusivity violation.
+                        ForEach(Array(settings.config.microphones.enumerated()), id: \.element.id) { idx, mic in
+                            let uid = mic.uid
+                            MicRow(mic: micBinding(mic), rank: idx + 1, connected: mics.isConnected(uid),
+                                   active: uid == activeUID, onForget: { forget(uid) })
                         }
-                        .onMove { from, to in settings.config.microphones.move(fromOffsets: from, toOffset: to) }
+                        .onMove { from, to in settings.moveMicrophones(fromOffsets: from, toOffset: to) }
                     }
                     .frame(minHeight: CGFloat(max(settings.config.microphones.count, 1)) * 46)
                     .scrollDisabled(true)
@@ -79,8 +84,21 @@ struct MicrophonesPane: View {
         .onDisappear { tester.stop() }
     }
 
-    private func forget(_ mic: MicRecord) {
-        settings.config.microphones.removeAll { $0.uid == mic.uid }
+    private func forget(_ uid: String) {
+        settings.removeMicrophones { $0.uid == uid }
+    }
+
+    private func micBinding(_ snapshot: MicRecord) -> Binding<MicRecord> {
+        let settings = settings
+        let uid = snapshot.uid
+        return Binding(
+            get: { settings.config.microphones.first { $0.uid == uid } ?? snapshot },
+            set: { new in
+                var list = settings.config.microphones
+                guard let i = list.firstIndex(where: { $0.uid == uid }) else { return }
+                list[i] = new
+                settings.config.microphones = list
+            })
     }
 }
 
@@ -473,8 +491,13 @@ struct VocabularyPane: View {
                     if settings.config.vocabulary.isEmpty {
                         Text("No terms yet.").foregroundStyle(.secondary)
                     }
-                    ForEach($settings.config.vocabulary) { $t in
-                        VocabRow(term: $t) { settings.config.vocabulary.removeAll { $0.id == t.id } }
+                    // Plain values, not `$settings.config.vocabulary` bindings: the delete
+                    // closure used to read the row's Binding (→ `settings.config`) from
+                    // inside `settings.config.vocabulary.removeAll`, which aborted the app
+                    // with a "simultaneous accesses" exclusivity violation.
+                    ForEach(settings.config.vocabulary) { t in
+                        let id = t.id
+                        VocabRow(term: t) { settings.removeVocabulary { $0.id == id } }
                     }
                 }
             }
@@ -494,7 +517,7 @@ struct VocabularyPane: View {
 }
 
 private struct VocabRow: View {
-    @Binding var term: VocabTerm
+    var term: VocabTerm
     var onDelete: () -> Void
     @ViewState private var hover = false
 

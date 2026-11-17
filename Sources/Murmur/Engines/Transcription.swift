@@ -146,6 +146,8 @@ final class AppleSpeechSession: TranscriptionSession, @unchecked Sendable {
     private var analyzerFormat: AVAudioFormat?
     private var analyzer: SpeechAnalyzer?
     private var setupTask: Task<Void, Error>?
+    // `resultsTask` and `cancelled` are shared between the setup task, the
+    // audio thread and the main thread: only touch them while holding `lock`.
     private var resultsTask: Task<String, Error>?
     private var cancelled = false
 
@@ -174,7 +176,7 @@ final class AppleSpeechSession: TranscriptionSession, @unchecked Sendable {
         try await analyzer.prepareToAnalyze(in: format)
 
         let (stream, cont) = AsyncStream<AnalyzerInput>.makeStream()
-        resultsTask = Task.detached { [weak self] in
+        let results = Task<String, Error>.detached { [weak self] in
             var finals: [String] = []
             func emit(_ volatile: String) {
                 let text = Self.join(finals + [volatile])
@@ -193,18 +195,44 @@ final class AppleSpeechSession: TranscriptionSession, @unchecked Sendable {
             }
             return Self.join(finals)
         }
-        try await analyzer.start(inputSequence: stream)
+        // Cancelled while we were still setting up: `cancel()` had no analyzer
+        // or results task to stop yet, so tear them down here.
+        func abandon() async throws -> Never {
+            cont.finish()
+            results.cancel()
+            await analyzer.cancelAndFinishNow()
+            throw CancellationError()
+        }
+        let cancelledEarly = lock.withLock { () -> Bool in
+            if cancelled { return true }
+            resultsTask = results
+            return false
+        }
+        if cancelledEarly { try await abandon() }
+        do {
+            try await analyzer.start(inputSequence: stream)
+        } catch {
+            cont.finish()
+            results.cancel()
+            throw error
+        }
 
-        lock.lock()
-        self.analyzer = analyzer
-        self.analyzerFormat = format
-        if format != speechFormat { converter = AVAudioConverter(from: speechFormat, to: format) }
-        continuation = cont
-        let backlog = pending
-        pending.removeAll()
-        lock.unlock()
-        backlog.forEach(push)
-        if cancelled { cont.finish() }
+        let cancelledLate = lock.withLock { () -> Bool in
+            if cancelled { return true }
+            self.analyzer = analyzer
+            self.analyzerFormat = format
+            if format != speechFormat { converter = AVAudioConverter(from: speechFormat, to: format) }
+            continuation = cont
+            // Flush the queued audio *before* releasing the lock. Once
+            // `continuation` is visible, `append` (audio thread) feeds the
+            // analyzer directly; flushing after unlocking let a live buffer
+            // overtake the backlog and reach the recognizer out of order.
+            let backlog = pending
+            pending.removeAll()
+            backlog.forEach(pushLocked)
+            return false
+        }
+        if cancelledLate { try await abandon() }
     }
 
     private static func join(_ parts: [String]) -> String {
@@ -216,19 +244,14 @@ final class AppleSpeechSession: TranscriptionSession, @unchecked Sendable {
     }
 
     func append(_ buffer: AVAudioPCMBuffer) {
-        lock.lock()
-        if continuation == nil {
-            pending.append(buffer)
-            lock.unlock()
-            return
+        lock.withLock {
+            guard !cancelled else { return }
+            if continuation == nil { pending.append(buffer) } else { pushLocked(buffer) }
         }
-        lock.unlock()
-        push(buffer)
     }
 
-    private func push(_ buffer: AVAudioPCMBuffer) {
-        lock.lock()
-        defer { lock.unlock() }
+    /// Converts if needed and feeds the analyzer. Caller must hold `lock`.
+    private func pushLocked(_ buffer: AVAudioPCMBuffer) {
         guard let continuation else { return }
         if let converter, let fmt = analyzerFormat {
             let cap = AVAudioFrameCount(Double(buffer.frameLength) * fmt.sampleRate / buffer.format.sampleRate) + 32
@@ -249,22 +272,23 @@ final class AppleSpeechSession: TranscriptionSession, @unchecked Sendable {
 
     func finish(samples: [Float]) async throws -> String {
         try await setupTask?.value
-        lock.lock()
-        continuation?.finish()
-        let analyzer = self.analyzer
-        lock.unlock()
+        let (analyzer, results) = lock.withLock { () -> (SpeechAnalyzer?, Task<String, Error>?) in
+            continuation?.finish()
+            return (self.analyzer, resultsTask)
+        }
         try await analyzer?.finalizeAndFinishThroughEndOfInput()
-        return try await resultsTask?.value ?? ""
+        return try await results?.value ?? ""
     }
 
     func cancel() {
-        cancelled = true
-        lock.lock()
-        continuation?.finish()
-        let analyzer = self.analyzer
-        lock.unlock()
+        let (analyzer, results) = lock.withLock { () -> (SpeechAnalyzer?, Task<String, Error>?) in
+            cancelled = true
+            pending.removeAll()
+            continuation?.finish()
+            return (self.analyzer, resultsTask)
+        }
         setupTask?.cancel()
-        resultsTask?.cancel()
+        results?.cancel()
         Task { await analyzer?.cancelAndFinishNow() }
     }
 }

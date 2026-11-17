@@ -171,6 +171,8 @@ fn transcribe_multipart(a: &TranscribeArgs) -> Result<String, String> {
         .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
     let mut body: Vec<u8> = Vec::with_capacity(wav.len() + 1024);
     let mut field = |name: &str, value: &str| {
+        // A line break inside a value would end the part early and corrupt the form.
+        let value = value.replace(['\r', '\n'], " ");
         body.extend_from_slice(
             format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes(),
         );

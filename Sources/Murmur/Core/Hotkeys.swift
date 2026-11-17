@@ -8,8 +8,12 @@ import Carbon.HIToolbox
 final class HotkeyManager {
     static let shared = HotkeyManager()
 
-    var onPress: (() -> Void)?
-    var onRelease: (() -> Void)?
+    /// Both carry the event's own timestamp (seconds since boot, like
+    /// `NSEvent.timestamp`): events can be delivered late while the main thread
+    /// is busy opening the microphone, and tap-vs-hold must be judged on when
+    /// the key actually moved, not on when the handler got to run.
+    var onPress: ((TimeInterval) -> Void)?
+    var onRelease: ((TimeInterval) -> Void)?
     /// Another key was pressed while the trigger modifier was held — it's a chord, not dictation.
     var onChord: (() -> Void)?
     var onEscape: (() -> Void)?
@@ -58,13 +62,13 @@ final class HotkeyManager {
     private func installModifier(_ mod: TriggerModifier) {
         let handler: (NSEvent) -> Void = { [weak self] e in
             guard let self, e.keyCode == mod.keyCode else { return }
-            let down = e.modifierFlags.contains(mod.flag)
+            let down = mod.isDown(in: e.modifierFlags)
             if down && !self.modifierDown {
                 self.modifierDown = true
-                self.onPress?()
+                self.onPress?(e.timestamp)
             } else if !down && self.modifierDown {
                 self.modifierDown = false
-                self.onRelease?()
+                self.onRelease?(e.timestamp)
             }
         }
         if let m = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: handler) { monitors.append(m) }
@@ -80,9 +84,10 @@ final class HotkeyManager {
         ]
         let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
             let kind = GetEventKind(event)
+            let time = GetEventTime(event)
             MainActor.assumeIsolated {
-                if kind == UInt32(kEventHotKeyPressed) { HotkeyManager.shared.onPress?() }
-                else { HotkeyManager.shared.onRelease?() }
+                if kind == UInt32(kEventHotKeyPressed) { HotkeyManager.shared.onPress?(time) }
+                else { HotkeyManager.shared.onRelease?(time) }
             }
             return noErr
         }, 2, &types, nil, &handlerRef)
@@ -99,6 +104,29 @@ final class HotkeyManager {
         if f.contains(.control) { m |= UInt32(controlKey) }
         if f.contains(.shift) { m |= UInt32(shiftKey) }
         return m
+    }
+}
+
+extension TriggerModifier {
+    /// Device-dependent (left/right) bits of `NSEvent.ModifierFlags.rawValue`,
+    /// from IOKit's NX_DEVICE…KEYMASK: (this key, its twin on the other side).
+    private var sideMasks: (own: UInt, twin: UInt)? {
+        switch self {
+        case .fn: nil
+        case .rightOption: (0x40, 0x20)
+        case .rightCommand: (0x10, 0x08)
+        case .rightControl: (0x2000, 0x01)
+        }
+    }
+
+    /// Whether *this* key is down after a flagsChanged event for its key code.
+    /// The device-independent flag alone can't tell: releasing right ⌥ while
+    /// left ⌥ is held still reports `.option`, which used to leave a
+    /// push-to-talk recording running with the key up.
+    func isDown(in flags: NSEvent.ModifierFlags) -> Bool {
+        guard flags.contains(flag) else { return false }
+        guard let m = sideMasks, flags.rawValue & (m.own | m.twin) != 0 else { return true }
+        return flags.rawValue & m.own != 0
     }
 }
 

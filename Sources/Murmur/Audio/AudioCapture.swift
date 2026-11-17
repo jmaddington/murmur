@@ -65,7 +65,13 @@ class CaptureSink {
     }
 
     func ingest(_ buffer: AVAudioPCMBuffer) {
-        lock.lock(); buffersIn += 1; lock.unlock()
+        // `finish()` clears the converter from another thread while a tap
+        // callback (or the FileSource task) can still be mid-flight: take a
+        // strong reference under the lock instead of racing on the property.
+        lock.lock()
+        buffersIn += 1
+        let converter = self.converter
+        lock.unlock()
         guard let converter else { return }
         let ratio = speechFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
@@ -141,7 +147,8 @@ final class MicrophoneSource: CaptureSink, AudioSource {
         try engine.start()
         self.engine = engine
         configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+            // Main queue: `engine` is only ever touched there (start/stop).
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
         ) { [weak self] _ in
             guard let self, let engine = self.engine, !engine.isRunning else { return }
             self.onFailure?(CaptureError(message: "\(self.deviceName ?? "Microphone") disconnected"))
@@ -150,6 +157,7 @@ final class MicrophoneSource: CaptureSink, AudioSource {
 
     func stop() -> [Float] {
         if let o = configObserver { NotificationCenter.default.removeObserver(o) }
+        configObserver = nil
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
