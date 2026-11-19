@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         DictationController.shared.install()
+        Updater.shared.start()
         prewarm()
         Sound.preload()
         if !AppSettings.shared.config.hasOnboarded {
@@ -110,6 +111,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         menu.addItem(.separator())
+        let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+        updates.isEnabled = Updater.shared.canCheck
+        menu.addItem(updates)
         menu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "Quit Murmur", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         for item in menu.items where item.action != #selector(NSApplication.terminate(_:)) { item.target = self }
@@ -122,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleDictation() { DictationController.shared.toggleFromMenu() }
     @objc private func openSettings() { SettingsWindowController.shared.show() }
+    @objc private func checkForUpdates() { Updater.shared.checkForUpdates() }
     @objc private func copyEntry(_ sender: NSMenuItem) {
         guard let s = sender.representedObject as? String else { return }
         NSPasteboard.general.clearContents()
