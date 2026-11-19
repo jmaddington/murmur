@@ -19,7 +19,7 @@ done
 import() {   # $1 = base64 p12, $2 = password
   local f="$RUNNER_TEMP/cert-$RANDOM.p12"
   echo "$1" | base64 --decode > "$f"
-  security import "$f" -k "$KC" -P "$2" -T /usr/bin/codesign -T /usr/bin/productbuild -T /usr/bin/productsign -T /usr/bin/pkgbuild
+  security import "$f" -k "$KC" -P "$2" -x -T /usr/bin/codesign -T /usr/bin/productbuild -T /usr/bin/productsign -T /usr/bin/pkgbuild
   rm -f "$f"
 }
 [[ -n "${DEVELOPER_ID_APP_P12:-}" ]] && import "$DEVELOPER_ID_APP_P12" "$DEVELOPER_ID_APP_PASSWORD"
