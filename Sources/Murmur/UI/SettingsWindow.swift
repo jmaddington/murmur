@@ -149,6 +149,7 @@ struct AppGlyph: View {
 struct HomePane: View {
     var history = HistoryStore.shared
     var settings = AppSettings.shared
+    @Bindable var updater = Updater.shared
     @ViewState private var mic = Permissions.microphone
     @ViewState private var ax = Permissions.accessibility
     private let poll = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
@@ -160,6 +161,7 @@ struct HomePane: View {
                 if mic != .authorized || !ax { permissions }
                 stats
                 recent
+                if updater.isRunning { updates }
             }
             .padding(28)
             .frame(maxWidth: 760)
@@ -242,6 +244,32 @@ struct HomePane: View {
                     Permissions.openPrivacy("Privacy_Accessibility")
                 }
             }
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
+        }
+    }
+
+    private var updates: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Updates").font(.system(size: 15, weight: .semibold))
+                Spacer()
+                Text("Version \(Updater.currentVersion)").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle("Check for updates automatically", isOn: $updater.automaticallyChecks)
+                Toggle("Download and install updates automatically", isOn: $updater.automaticallyInstalls)
+                    .disabled(!updater.automaticallyChecks)
+                HStack {
+                    Button("Check Now") { updater.checkForUpdates() }.disabled(!updater.canCheck)
+                    if let last = updater.lastChecked {
+                        Text("Last checked \(last.formatted(.relative(presentation: .named)))")
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .toggleStyle(.switch).controlSize(.small)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
         }
     }

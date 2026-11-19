@@ -135,7 +135,19 @@ Repository secrets for releases (the job runs in the `release` environment, so y
 | `DEVELOPER_ID_INSTALLER_P12` / `DEVELOPER_ID_INSTALLER_PASSWORD` | Same for the installer cert |
 | `ASC_API_KEY_P8` | Contents of `AuthKey_XXXX.p8` (App Store Connect › Users and Access › Integrations › Team Keys, role *Developer*) |
 | `ASC_API_KEY_ID` / `ASC_API_ISSUER_ID` | From the same page |
+| `SPARKLE_ED_PRIVATE_KEY` | EdDSA private key that signs auto-updates (see below) |
 | `OPENROUTER_E2E_KEY` | *(optional, CI)* runs the live OpenRouter e2e cases |
+
+### Auto-update (Sparkle)
+
+Murmur updates itself with [Sparkle](https://sparkle-project.org) 2. It checks once a day, and Home › Updates has toggles for automatic checks and automatic install, plus **Check Now**. The menu bar menu also has **Check for Updates…**.
+
+- **Feed:** `SUFeedURL` points at `releases/latest/download/appcast.xml`. GitHub redirects that to the newest release, so nothing else needs hosting. Each release workflow run writes `appcast.xml` with `scripts/make-appcast.sh` and uploads it with the other files.
+- **Signing:** every update DMG is EdDSA-signed with `SPARKLE_ED_PRIVATE_KEY`, and the app only accepts updates that verify against `SUPublicEDKey` in `Resources/Info.plist`. The DMG is still Developer ID signed and notarized as before.
+- **The key:** the private key's backup lives in the maintainer's login keychain (account `sparkle-murmur`, created with Sparkle's `generate_keys`). **If it's lost, existing installs can't verify future updates.** Export a backup with `$(scripts/ci/sparkle-tools.sh)/generate_keys --account sparkle-murmur -x murmur-sparkle.key` and keep it somewhere safe.
+- **Versioning:** Sparkle compares `CFBundleVersion`, which is the release workflow's run number, so every new release is automatically higher than the last.
+- **Upgrading Sparkle:** bump the version in `Package.swift` and `SPARKLE_VERSION`/`SPARKLE_SHA256` in `scripts/ci/sparkle-tools.sh` together.
+- Builds without Sparkle (v0.1.0) have to install the first Sparkle-enabled release by hand. After that, updates arrive on their own.
 
 ## Layout
 
