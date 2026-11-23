@@ -16,8 +16,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var axTimer: Timer?
     fileprivate var lastAXState = TextInserter.hasAccessibility
 
+    /// Text fields get ⌘X/⌘C/⌘V/⌘A/⌘Z only through main-menu key equivalents;
+    /// a menu-bar app has no menu unless we build one.
+    static func makeMainMenu() -> NSMenu {
+        let main = NSMenu()
+        func submenu(_ title: String, _ items: [NSMenuItem]) {
+            let m = NSMenu(title: title)
+            items.forEach(m.addItem)
+            let host = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            host.submenu = m
+            main.addItem(host)
+        }
+        func item(_ t: String, _ a: Selector?, _ k: String, _ mods: NSEvent.ModifierFlags = .command) -> NSMenuItem {
+            let i = NSMenuItem(title: t, action: a, keyEquivalent: k)
+            i.keyEquivalentModifierMask = mods
+            return i
+        }
+        submenu("Murmur", [
+            item("About Murmur", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), ""),
+            .separator(),
+            item("Hide Murmur", #selector(NSApplication.hide(_:)), "h"),
+            item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
+            .separator(),
+            item("Quit Murmur", #selector(NSApplication.terminate(_:)), "q"),
+        ])
+        submenu("Edit", [
+            item("Undo", Selector(("undo:")), "z"),
+            item("Redo", Selector(("redo:")), "z", [.command, .shift]),
+            .separator(),
+            item("Cut", #selector(NSText.cut(_:)), "x"),
+            item("Copy", #selector(NSText.copy(_:)), "c"),
+            item("Paste", #selector(NSText.paste(_:)), "v"),
+            item("Paste and Match Style", #selector(NSTextView.pasteAsPlainText(_:)), "v", [.command, .option, .shift]),
+            item("Delete", #selector(NSText.delete(_:)), ""),
+            item("Select All", #selector(NSText.selectAll(_:)), "a"),
+        ])
+        let window = [
+            item("Close", #selector(NSWindow.performClose(_:)), "w"),
+            item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
+            item("Zoom", #selector(NSWindow.performZoom(_:)), ""),
+        ]
+        submenu("Window", window)
+        NSApp.windowsMenu = main.items.last?.submenu
+        return main
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        NSApp.mainMenu = Self.makeMainMenu()
         _ = MicrophoneManager.shared
         HistoryStore.shared.start()
         setupStatusItem()
