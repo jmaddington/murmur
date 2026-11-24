@@ -6,11 +6,23 @@ struct LabPane: View {
     @Bindable var settings = AppSettings.shared
     var history = HistoryStore.shared
     var store = LocalModelStore.shared
+    @ViewState private var mode = 0
 
     var body: some View {
         VStack(spacing: 0) {
             PaneHeader(symbol: Pane.lab.symbol, color: Pane.lab.color, title: "Lab",
                        subtitle: "Replay real recordings through other models and prompts. Find the fastest setup that still nails it.")
+            Picker("", selection: $mode) {
+                Text("Eval · all recordings").tag(0)
+                Text("One recording").tag(1)
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 360).padding(.bottom, 4)
+            if mode == 0 { EvalView(settings: settings, store: store) } else { single }
+        }
+        .onAppear { store.refresh() }
+    }
+
+    private var single: some View {
             Form {
                 if lab.entries.isEmpty {
                     Section {
@@ -24,8 +36,6 @@ struct LabPane: View {
                 }
             }
             .formStyle(.grouped)
-        }
-        .onAppear { store.refresh() }
     }
 }
 
@@ -235,12 +245,12 @@ private struct LabPolishSection: View {
 
 // MARK: - Pieces
 
-private func seconds(_ s: Double?) -> String {
+func seconds(_ s: Double?) -> String {
     guard let s else { return "—" }
     return s < 10 ? String(format: "%.2f s", s) : String(format: "%.1f s", s)
 }
 
-private struct Chip: View {
+struct Chip: View {
     var label: String
     var on: Bool
     var action: () -> Void
@@ -261,7 +271,7 @@ private struct Chip: View {
     }
 }
 
-private struct ChipGrid<Content: View>: View {
+struct ChipGrid<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 6, alignment: .leading)], alignment: .leading, spacing: 6) {
@@ -271,7 +281,7 @@ private struct ChipGrid<Content: View>: View {
 }
 
 /// Add / remove OpenRouter model ids for the Lab, with the usual model picker.
-private struct ModelListEditor: View {
+struct ModelListEditor: View {
     @Binding var models: [String]
     var audioOnly: Bool
     var placeholder: String
@@ -302,7 +312,7 @@ private struct ModelListEditor: View {
     }
 }
 
-private struct RunButton: View {
+struct RunButton: View {
     var title: String
     var running: Bool
     var disabled: Bool
@@ -387,4 +397,298 @@ private struct ResultCard: View {
     }
 
     private func scoreColor(_ s: Double) -> Color { s >= 8 ? .green : s >= 6 ? .orange : .red }
+}
+
+// MARK: - Eval (all recordings × pipelines)
+
+struct EvalView: View {
+    @Bindable var settings: AppSettings
+    var store: LocalModelStore
+    @Bindable var eval = LabEval.shared
+    var history = HistoryStore.shared
+    @ViewState private var sort = 0
+    @ViewState private var expanded: String?
+
+    var body: some View {
+        Form {
+            recordingsSection
+            pipelinesSection
+            judgeSection
+            runSection
+            if let run = eval.current { EvalResults(run: run, eval: eval, sort: $sort, expanded: $expanded) }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var recordingsSection: some View {
+        Section {
+            if eval.recordings.isEmpty {
+                Text("No recordings with saved audio yet. Murmur keeps audio for the period set in History → Retention.")
+                    .foregroundStyle(.secondary)
+            } else {
+                DisclosureGroup {
+                    ForEach(eval.recordings) { e in
+                        Toggle(isOn: Binding(get: { !eval.excluded.contains(e.id) },
+                                             set: { on in if on { eval.excluded.remove(e.id) } else { eval.excluded.insert(e.id) } })) {
+                            HStack {
+                                Text(LabEval.title(e)).lineLimit(1)
+                                Spacer()
+                                Text(e.date, format: .dateTime.month(.abbreviated).day().hour().minute())
+                                    .foregroundStyle(.secondary).font(.system(size: 11))
+                            }
+                        }
+                    }
+                    HStack {
+                        Button("All") { eval.excluded = [] }
+                        Button("None") { eval.excluded = Set(eval.recordings.map(\.id)) }
+                    }
+                    .controlSize(.small)
+                } label: {
+                    let total = eval.selected.reduce(0) { $0 + $1.duration }
+                    Text("\(eval.selected.count) of \(eval.recordings.count) recordings · \(HUDView.clock(total)) of audio")
+                }
+            }
+        } header: { Text("Recordings") }
+    }
+
+    private var pipelinesSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Speech engines").font(.system(size: 12, weight: .medium))
+                ChipGrid {
+                    ForEach(AppleSpeechModel.allCases) { m in sttChip(.apple(m)) }
+                    ForEach(LocalModel.allCases.filter { store.state($0) == .ready }) { m in sttChip(.local(m)) }
+                    ForEach(settings.config.labTranscribeModels, id: \.self) { m in sttChip(.openrouter(m)) }
+                    sttChip(.custom)
+                }
+                ModelListEditor(models: $settings.config.labTranscribeModels, audioOnly: true, placeholder: "Add an OpenRouter audio model")
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Cleanup").font(.system(size: 12, weight: .medium))
+                ChipGrid {
+                    Chip(label: "No cleanup", on: eval.includeRaw) { eval.includeRaw.toggle() }
+                    polChip(.apple)
+                    ForEach(settings.config.labCleanupModels, id: \.self) { m in polChip(.openrouter(m)) }
+                    polChip(.custom)
+                }
+                ModelListEditor(models: $settings.config.labCleanupModels, audioOnly: false, placeholder: "Add an OpenRouter model")
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Prompts").font(.system(size: 12, weight: .medium))
+                HStack(spacing: 6) {
+                    ForEach(Lab.PromptChoice.allCases) { p in
+                        Chip(label: p.label, on: eval.prompts.contains(p)) {
+                            if eval.prompts.contains(p) { eval.prompts.remove(p) } else { eval.prompts.insert(p) }
+                        }
+                        .disabled((p == .mine && settings.config.cleanupCustomPrompt.isEmpty) || (p == .lab && settings.config.labPrompt.isEmpty))
+                    }
+                }
+                Text("“My prompt” is your Cleanup prompt; edit the “Lab prompt” in One recording mode.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+        } header: { Text("Pipelines") }
+    }
+
+    private var judgeSection: some View {
+        Section {
+            Toggle("Score every result with a judge model", isOn: $eval.judge)
+            if eval.judge {
+                Picker("Judge", selection: $eval.judgeListens) {
+                    Text("Listens to the recording").tag(true)
+                    Text("Reads a reference transcript").tag(false)
+                }
+                if eval.judgeListens {
+                    LabeledContent("Audio model") {
+                        TextField("", text: $settings.config.labListenJudgeModel).textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12, design: .monospaced))
+                    }
+                    Text("Hears what you actually said and grades the final text end to end. Needs an audio-capable model.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                } else {
+                    LabeledContent("Model") {
+                        TextField("", text: $settings.config.labJudgeModel).textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12, design: .monospaced))
+                    }
+                    Picker("Reference transcript", selection: $settings.config.labReferenceSTT) {
+                        ForEach(referenceChoices, id: \.id) { Text($0.label).tag($0.id) }
+                    }
+                }
+            }
+        } header: { Text("Judge") }
+    }
+
+    private var referenceChoices: [Lab.STT] {
+        AppleSpeechModel.allCases.map { Lab.STT.apple($0) }
+            + LocalModel.allCases.filter { store.state($0) == .ready }.map { Lab.STT.local($0) }
+            + settings.config.labTranscribeModels.map { Lab.STT.openrouter($0) }
+    }
+
+    private var runSection: some View {
+        Section {
+            let pipes = eval.pipelines.count
+            let runs = pipes * eval.selected.count
+            HStack(spacing: 10) {
+                if eval.running {
+                    Button("Stop") { eval.cancel() }
+                    ProgressView(value: Double(eval.done), total: Double(max(eval.total, 1))).frame(maxWidth: 240)
+                    Text("\(eval.done)/\(eval.total)").monospacedDigit().foregroundStyle(.secondary)
+                } else {
+                    RunButton(title: "Run eval", running: false, disabled: runs == 0 || eval.excluded.count == eval.recordings.count) { eval.start() }
+                    Text("\(pipes) pipelines × \(eval.selected.count) recordings = \(runs) results. Transcripts are cached, so re-runs only pay for cleanup.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func sttChip(_ s: Lab.STT) -> some View {
+        Chip(label: s.label, on: eval.sttChoices.contains(s)) {
+            if eval.sttChoices.contains(s) { eval.sttChoices.remove(s) } else { eval.sttChoices.insert(s) }
+        }
+    }
+
+    private func polChip(_ p: Lab.Polisher) -> some View {
+        Chip(label: p.label, on: eval.polishers.contains(p)) {
+            if eval.polishers.contains(p) { eval.polishers.remove(p) } else { eval.polishers.insert(p) }
+        }
+    }
+}
+
+private struct EvalResults: View {
+    var run: EvalRun
+    var eval: LabEval
+    @Binding var sort: Int
+    @Binding var expanded: String?
+
+    var body: some View {
+        Section {
+            HStack {
+                Picker("Run", selection: Binding(get: { run.id }, set: { id in eval.current = eval.runs.first { $0.id == id } })) {
+                    ForEach(eval.runs) { r in
+                        Text("\(r.date.formatted(.dateTime.month(.abbreviated).day().hour().minute())) · \(r.recordingIDs.count) rec × \(r.pipelines.count)").tag(r.id)
+                    }
+                    if !eval.runs.contains(where: { $0.id == run.id }) { Text("Current").tag(run.id) }
+                }
+                .frame(maxWidth: 320)
+                Spacer()
+                Picker("", selection: $sort) {
+                    Text("Best score").tag(0)
+                    Text("Fastest").tag(1)
+                    Text("Cheapest").tag(2)
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 250)
+                Menu {
+                    Button("Export CSV…") { export() }
+                    Button("Delete run", role: .destructive) { eval.deleteRun(run) }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton).fixedSize()
+            }
+            if let best = eval.best(run) {
+                let l = LabEval.label(best.pipeline)
+                Label {
+                    Text("Fastest\(best.score != nil ? " averaging 8+" : ""): **\(l.stt)** → **\(l.cleanup)** · \(seconds(best.totalSeconds))\(best.score.map { String(format: " · %.1f/10", $0) } ?? "")")
+                } icon: { Image(systemName: "trophy.fill").foregroundStyle(.yellow) }
+                .font(.system(size: 12.5))
+            }
+            EvalHeaderRow()
+            ForEach(sorted(eval.rows(run))) { row in
+                EvalRowView(row: row, open: expanded == row.id) { expanded = expanded == row.id ? nil : row.id }
+                if expanded == row.id {
+                    ForEach(run.cells.filter { $0.pipelineID == row.id }) { c in EvalCellView(cell: c, eval: eval) }
+                }
+            }
+        } header: { Text("Results") }
+    }
+
+    private func sorted(_ rows: [EvalRow]) -> [EvalRow] {
+        switch sort {
+        case 1: rows.sorted { ($0.totalSeconds ?? .infinity) < ($1.totalSeconds ?? .infinity) }
+        case 2: rows.sorted { ($0.costPer1k ?? 0) < ($1.costPer1k ?? 0) }
+        default: rows.sorted { ($0.score ?? -1, -($0.totalSeconds ?? .infinity)) > ($1.score ?? -1, -($1.totalSeconds ?? .infinity)) }
+        }
+    }
+
+    private func export() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "murmur-eval-\(run.date.formatted(.iso8601.year().month().day())).csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? eval.csv(run).write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
+private struct EvalHeaderRow: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Speech → Cleanup").frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                Text("Score")
+                Text("Speech")
+                Text("Cleanup")
+                Text("Total")
+                Text("$ / 1k")
+            }
+            .frame(width: 58, alignment: .trailing)
+        }
+        .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.secondary)
+    }
+}
+
+private struct EvalRowView: View {
+    var row: EvalRow
+    var open: Bool
+    var toggle: () -> Void
+
+    var body: some View {
+        let l = LabEval.label(row.pipeline)
+        Button(action: toggle) {
+            HStack(spacing: 8) {
+                Image(systemName: open ? "chevron.down" : "chevron.right").font(.system(size: 9)).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(l.stt).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                    Text(l.cleanup + (row.failures > 0 ? " · \(row.failures) failed" : ""))
+                        .font(.system(size: 11)).foregroundStyle(row.failures > 0 ? Color.orange : Color.secondary).lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Group {
+                    Text(row.score.map { String(format: "%.1f", $0) } ?? "—")
+                        .foregroundStyle(row.score.map { $0 >= 8 ? Color.green : $0 >= 6 ? Color.orange : Color.red } ?? Color.secondary)
+                        .fontWeight(.bold)
+                    Text(seconds(row.sttSeconds))
+                    Text(row.pipeline.polisher == nil ? "—" : seconds(row.cleanSeconds))
+                    Text(seconds(row.totalSeconds)).fontWeight(.semibold)
+                    Text(row.costPer1k.map { $0 < 0.01 ? "<0.01" : String(format: "%.2f", $0) } ?? "—")
+                }
+                .frame(width: 58, alignment: .trailing)
+                .monospacedDigit()
+            }
+            .font(.system(size: 12))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct EvalCellView: View {
+    var cell: EvalCell
+    var eval: LabEval
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(eval.recording(cell.recordingID).map(LabEval.title) ?? "Deleted recording")
+                    .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).lineLimit(1)
+                Spacer()
+                if let s = cell.score { Text(String(format: "%.0f/10", s)).font(.system(size: 11, weight: .bold)) }
+                Text(seconds(cell.totalSeconds)).font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
+            }
+            if let e = cell.error {
+                Text(e).font(.system(size: 11.5)).foregroundStyle(.red)
+            } else {
+                Text(cell.text ?? "").font(.system(size: 12)).textSelection(.enabled)
+                if let n = cell.notes, !n.isEmpty { Text(n).font(.system(size: 11)).italic().foregroundStyle(.secondary) }
+            }
+        }
+        .padding(.leading, 18).padding(.vertical, 2)
+    }
 }

@@ -198,6 +198,10 @@ struct Config: Codable {
     ]
     var labPrompt = ""
     var labJudgeModel = "anthropic/claude-sonnet-5.5"
+    /// Judge that listens to the recording (must accept audio).
+    var labListenJudgeModel = "openai/gpt-audio"
+    /// Reference engine for the text judge in Eval.
+    var labReferenceSTT = "apple:speech"
 
     init() {}
 
@@ -219,6 +223,7 @@ struct Config: Codable {
         d(.playSounds, &playSounds); d(.soundStyle, &soundStyle); d(.soundVolume, &soundVolume); d(.restoreClipboard, &restoreClipboard); d(.hasOnboarded, &hasOnboarded)
         d(.developerMode, &developerMode); d(.labTranscribeModels, &labTranscribeModels); d(.labCleanupModels, &labCleanupModels)
         d(.labPrompt, &labPrompt); d(.labJudgeModel, &labJudgeModel)
+        d(.labListenJudgeModel, &labListenJudgeModel); d(.labReferenceSTT, &labReferenceSTT)
     }
 }
 

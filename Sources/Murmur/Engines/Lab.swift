@@ -167,6 +167,8 @@ final class Lab {
         }
     }
 
+    func pipelineConfig(for choice: STT, appName: String?) -> PipelineConfig { pipeline(for: choice, appName: appName) }
+
     private func pipeline(for choice: STT, appName: String?) -> PipelineConfig {
         var cfg = PipelineConfig.current(appName: appName)
         let c = AppSettings.shared.config
@@ -230,28 +232,8 @@ final class Lab {
         }
 
         func config(_ m: Polisher, _ p: PromptChoice) -> PipelineConfig {
-            var cfg = PipelineConfig.current(appName: c.cleanupUsesAppContext ? e.appName : nil)
-            cfg.cleanupEnabled = true
-            cfg.cleanupSendsAudio = false
-            switch m {
-            case .apple:
-                cfg.cleanupEngine = .apple
-            case .openrouter(let model):
-                cfg.cleanupEngine = .openrouter
-                cfg.cleanupProvider = RemoteProvider(kind: .openrouter, baseUrl: nil, apiKey: Keychain.get(.openrouter), model: model)
-            case .custom:
-                cfg.cleanupEngine = .openaiCompatible
-                cfg.cleanupProvider = RemoteProvider(kind: .openaiCompatible, baseUrl: c.customCleanupURL,
-                                                     apiKey: Keychain.get(.customCleanup), model: c.customCleanupModel)
-            }
-            switch p {
-            case .builtIn: cfg.cleanupCustomPrompt = nil
-            case .mine: cfg.cleanupCustomPrompt = c.cleanupCustomPrompt
-            case .lab: cfg.cleanupCustomPrompt = c.labPrompt.isEmpty ? nil : c.labPrompt
-            }
-            return cfg
+            cleanupConfig(m, p, appName: c.cleanupUsesAppContext ? e.appName : nil)
         }
-
         // Apple's on-device model runs one at a time; remote calls run together.
         let remote = jobs.filter { $0.polisher != .apple }
         let local = jobs.filter { $0.polisher == .apple }
@@ -265,6 +247,31 @@ final class Lab {
             }
         }
         if judge { await judgeAll(input: input) }
+    }
+
+    /// Cleanup settings for one Lab model × prompt choice.
+    func cleanupConfig(_ m: Polisher, _ p: PromptChoice, appName: String?) -> PipelineConfig {
+        let c = AppSettings.shared.config
+        var cfg = PipelineConfig.current(appName: appName)
+        cfg.cleanupEnabled = true
+        cfg.cleanupSendsAudio = false
+        switch m {
+        case .apple:
+            cfg.cleanupEngine = .apple
+        case .openrouter(let model):
+            cfg.cleanupEngine = .openrouter
+            cfg.cleanupProvider = RemoteProvider(kind: .openrouter, baseUrl: nil, apiKey: Keychain.get(.openrouter), model: model)
+        case .custom:
+            cfg.cleanupEngine = .openaiCompatible
+            cfg.cleanupProvider = RemoteProvider(kind: .openaiCompatible, baseUrl: c.customCleanupURL,
+                                                 apiKey: Keychain.get(.customCleanup), model: c.customCleanupModel)
+        }
+        switch p {
+        case .builtIn: cfg.cleanupCustomPrompt = nil
+        case .mine: cfg.cleanupCustomPrompt = c.cleanupCustomPrompt
+        case .lab: cfg.cleanupCustomPrompt = c.labPrompt.isEmpty ? nil : c.labPrompt
+        }
+        return cfg
     }
 
     private func runPolish(_ index: Int, input: String, cfg: PipelineConfig) async {

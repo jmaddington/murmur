@@ -251,9 +251,15 @@ pub fn cleanup_with_usage(a: &CleanupArgs) -> Result<(String, Value), String> {
 #[derive(Deserialize)]
 pub struct JudgeArgs {
     pub provider: Provider,
-    /// What was actually said (the transcript the cleanup started from).
+    /// What was actually said (a reference transcript). Unused when the
+    /// judge listens to the recording instead.
+    #[serde(default)]
     pub transcript: String,
     pub candidate: String,
+    /// When set, the judge hears the recording and grades the final text
+    /// against it (end-to-end: transcription + cleanup).
+    #[serde(default)]
+    pub wav_path: Option<String>,
     #[serde(default)]
     pub vocabulary: Vec<crate::vocabulary::Term>,
 }
@@ -277,11 +283,20 @@ pub fn parse_verdict(raw: &str) -> Option<Verdict> {
 
 /// Score a cleanup against the transcript it came from, for the Lab.
 pub fn judge(a: &JudgeArgs) -> Result<(Verdict, Value), String> {
-    let messages = json!([
-        { "role": "system", "content": prompts::judge_system(&a.vocabulary) },
-        { "role": "user", "content": prompts::judge_user(&a.transcript, &a.candidate) }
-    ]);
-    let (raw, usage) = chat_with_usage(&a.provider, messages, 90)?;
+    let messages = match &a.wav_path {
+        Some(wav) => json!([
+            { "role": "system", "content": prompts::judge_audio_system(&a.vocabulary) },
+            { "role": "user", "content": [
+                { "type": "text", "text": prompts::judge_audio_user(&a.candidate) },
+                audio_part(wav)?
+            ]}
+        ]),
+        None => json!([
+            { "role": "system", "content": prompts::judge_system(&a.vocabulary) },
+            { "role": "user", "content": prompts::judge_user(&a.transcript, &a.candidate) }
+        ]),
+    };
+    let (raw, usage) = chat_with_usage(&a.provider, messages, 120)?;
     let verdict = parse_verdict(&raw).ok_or_else(|| format!("judge reply wasn't a score: {}", raw.chars().take(120).collect::<String>()))?;
     Ok((verdict, usage))
 }

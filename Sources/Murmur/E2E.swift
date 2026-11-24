@@ -142,6 +142,7 @@ enum E2E {
         }
 
         if let r = await labTest() { results.append(r) }
+        if let r = await evalTest() { results.append(r) }
         results.append(settingsMutationTest())
         results.append(contentsOf: await microphoneTests())
 
@@ -474,6 +475,60 @@ enum E2E {
                       seconds: Date().timeIntervalSince(t0), notes: notes)
     }
 
+    /// Eval: every History recording × several pipelines, judged by a model
+    /// that "listens", aggregated into a leaderboard; second run hits the cache.
+    @MainActor private static func evalTest() async -> Result? {
+        guard let base = ProcessInfo.processInfo.environment["MURMUR_E2E_MOCK_BASE"] else { return nil }
+        log("case Lab Eval · all recordings × pipelines, listening judge, leaderboard")
+        setenv("MURMUR_OPENROUTER_BASE", base, 1)
+        defer { unsetenv("MURMUR_OPENROUTER_BASE") }
+        Keychain.set("test-key", for: .openrouter)
+        AppSettings.shared.config.labListenJudgeModel = "mock/judge"
+        HistoryStore.shared.reload()
+        let ev = LabEval.shared
+        ev.excluded = []
+        let recs = Array(ev.recordings.prefix(3))
+        ev.excluded = Set(ev.recordings.map(\.id)).subtracting(recs.map(\.id))
+        ev.sttChoices = [.openrouter("mock/audio-model")]
+        if LocalModelStore.isInstalled(.parakeetV3) { ev.sttChoices.insert(.local(.parakeetV3)) }
+        ev.polishers = [.openrouter("mock/text-model"), .openrouter("mock/other-model")]
+        ev.prompts = [.builtIn]
+        ev.includeRaw = true
+        ev.judge = true
+        ev.judgeListens = true
+        let t0 = Date()
+        ev.start()
+        while ev.running { try? await Task.sleep(for: .milliseconds(100)) }
+        let first = Date().timeIntervalSince(t0)
+        var notes: [String] = []
+        guard let run = ev.current else {
+            return Result(name: "Lab Eval", passed: false, raw: "", final: "", seconds: first, notes: ["no run"])
+        }
+        let expected = recs.count * ev.pipelines.count
+        let complete = run.cells.count == expected && run.cells.allSatisfy { $0.error == nil && $0.text != nil }
+        let judged = run.cells.allSatisfy { $0.score != nil }
+        let rows = ev.rows(run)
+        let best = ev.best(run)
+        let persisted = ev.runs.contains { $0.id == run.id }
+        let csvLines = ev.csv(run).split(separator: "\n").count
+        // Second run: transcripts come from the cache.
+        let t1 = Date()
+        ev.start()
+        while ev.running { try? await Task.sleep(for: .milliseconds(100)) }
+        let cachedOK = (ev.current?.cells.filter { $0.sttSeconds != nil }.count ?? 0) == expected
+        notes.append("\(recs.count) recordings × \(ev.pipelines.count) pipelines = \(run.cells.count)/\(expected) results\(complete ? " ✓" : "")")
+        notes.append("listening judge scored all \(judged ? "✓" : "✗")")
+        notes.append("leaderboard rows \(rows.count), best: \(best.map { LabEval.label($0.pipeline).stt + " → " + LabEval.label($0.pipeline).cleanup } ?? "none")")
+        notes.append("run saved \(persisted ? "✓" : "✗"), CSV lines \(csvLines)")
+        notes.append(String(format: "first run %.1fs, cached re-run %.1fs %@", first, Date().timeIntervalSince(t1), cachedOK ? "✓" : "✗"))
+        for c in run.cells where c.error != nil { notes.append("error: \(c.error!)") }
+        let ok = complete && judged && rows.count == ev.pipelines.count && best != nil && persisted && csvLines == expected + 1 && cachedOK
+        log("  → \(ok ? "PASS" : "FAIL") Lab Eval: \(notes)")
+        ev.excluded = []
+        return Result(name: "Lab Eval · recordings × pipelines, judge, leaderboard", passed: ok, raw: "", final: "",
+                      seconds: Date().timeIntervalSince(t0), notes: notes)
+    }
+
     // MARK: Screenshots
 
     @MainActor private static func screenshots(to dir: URL) async {
@@ -513,6 +568,19 @@ enum E2E {
             }
             try? await Task.sleep(for: .milliseconds(600))
             snapshot(SettingsWindowController.shared.window, to: dir.appendingPathComponent("\(scheme)-pane-cleanup-prompt.png"))
+            // Lab eval leaderboard (bottom of the Lab pane).
+            SettingsNavigation.shared.pane = .lab
+            try? await Task.sleep(for: .milliseconds(900))
+            if let root = SettingsWindowController.shared.window?.contentView {
+                func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(scrollViews) }
+                if let sv = scrollViews(root).max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }),
+                   let doc = sv.documentView {
+                    sv.contentView.scroll(to: NSPoint(x: 0, y: doc.isFlipped ? max(0, doc.frame.height - sv.contentView.bounds.height) : 0))
+                    sv.reflectScrolledClipView(sv.contentView)
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(600))
+            snapshot(SettingsWindowController.shared.window, to: dir.appendingPathComponent("\(scheme)-pane-lab-results.png"))
             AppSettings.shared.config.cleanupUseCustomPrompt = false
             SettingsWindowController.shared.window?.orderOut(nil)
 

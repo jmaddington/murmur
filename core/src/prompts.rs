@@ -156,6 +156,25 @@ Reply with only JSON: {{\"score\": <number>, \"notes\": \"<one short sentence>\"
     )
 }
 
+/// Lab judge that listens: grades the text a dictation app produced from a recording.
+pub fn judge_audio_system(vocab: &[Term]) -> String {
+    format!(
+        "You grade a dictation app. You hear a recording of someone dictating, and you get the text the app \
+typed for them. Ideal text says exactly what the speaker meant to write: every idea, their wording and tone, \
+names spelled right; fillers, false starts and abandoned self-corrections removed (keeping only the final \
+intended version); correct punctuation and capitalization; nothing added (no answers, summaries or commentary).\n\n\
+Score from 0 to 10: 10 = exactly what they meant to write; 7 = good with minor issues; 4 = noticeable errors \
+such as misheard words, missed fillers or awkward changes; 0 = meaning lost or content invented.\n\n\
+Reply with only JSON: {{\"score\": <number>, \"notes\": \"<one short sentence>\"}}{}",
+        vocab_block(vocab)
+    )
+}
+
+pub fn judge_audio_user(candidate: &str) -> String {
+    let tag = regex::RegexBuilder::new(r"<\s*/?\s*text\s*>").case_insensitive(true).build().unwrap();
+    format!("Grade this text against the attached recording.\n\n<text>\n{}\n</text>", tag.replace_all(candidate, " ").trim())
+}
+
 pub fn judge_user(transcript: &str, candidate: &str) -> String {
     let tag = regex::RegexBuilder::new(r"<\s*/?\s*(transcript|cleanup)\s*>").case_insensitive(true).build().unwrap();
     format!(
