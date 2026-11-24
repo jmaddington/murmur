@@ -73,6 +73,94 @@
     ]
   },
   {
+    "name": "open model \u00b7 Parakeet v3 (Core ML) \u00b7 plain dictation",
+    "audio": "audio/basic.aiff",
+    "engine": "local",
+    "local_model": "parakeetV3",
+    "expect_contains": [
+      "design review",
+      "Wednesday",
+      "agenda"
+    ],
+    "requires": [
+      "model:parakeetV3"
+    ]
+  },
+  {
+    "name": "open model \u00b7 Parakeet v3 \u00b7 custom vocabulary corrections",
+    "audio": "audio/vocab.aiff",
+    "engine": "local",
+    "local_model": "parakeetV3",
+    "vocabulary": [
+      {
+        "term": "JQ Reyes",
+        "sounds_like": [
+          "jay queue reyes",
+          "jake you raised",
+          "jq rays"
+        ]
+      },
+      {
+        "term": "Kubernetes",
+        "sounds_like": [
+          "cooper netties"
+        ]
+      }
+    ],
+    "expect_contains": [
+      "JQ Reyes",
+      "Kubernetes",
+      "dashboard"
+    ],
+    "requires": [
+      "model:parakeetV3"
+    ]
+  },
+  {
+    "name": "open model \u00b7 Voxtral Realtime 4B (MLX) \u00b7 plain dictation",
+    "audio": "audio/basic.aiff",
+    "engine": "local",
+    "local_model": "voxtral",
+    "expect_contains": [
+      "design review",
+      "Wednesday",
+      "agenda"
+    ],
+    "requires": [
+      "model:voxtral"
+    ]
+  },
+  {
+    "name": "open model \u00b7 Voxtral \u00b7 custom vocabulary corrections",
+    "audio": "audio/vocab.aiff",
+    "engine": "local",
+    "local_model": "voxtral",
+    "vocabulary": [
+      {
+        "term": "JQ Reyes",
+        "sounds_like": [
+          "jay queue reyes",
+          "jake you raised",
+          "jq rays"
+        ]
+      },
+      {
+        "term": "Kubernetes",
+        "sounds_like": [
+          "cooper netties"
+        ]
+      }
+    ],
+    "expect_contains": [
+      "JQ Reyes",
+      "Kubernetes",
+      "dashboard"
+    ],
+    "requires": [
+      "model:voxtral"
+    ]
+  },
+  {
     "name": "insertion into a focused text field",
     "audio": "audio/short.aiff",
     "engine": "apple",

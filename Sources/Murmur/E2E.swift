@@ -26,6 +26,7 @@ enum E2E {
         var audio: String
         var engine: TranscriptionEngine?
         var appleModel: AppleSpeechModel?
+        var localModel: LocalModel?
         var cleanup: CleanupEngine?
         var vocabulary: [VocabTerm]?
         var expectContains: [String]?
@@ -62,6 +63,24 @@ enum E2E {
             }
         case "apple_intelligence":
             v = Cleanup.appleAvailability == nil
+        case let c where c.hasPrefix("model:"):
+            // Installed open model; with MURMUR_E2E_INSTALL_MODELS=1, install it
+            // through the same code path as the Settings "Download" button.
+            guard let m = LocalModel(rawValue: String(c.dropFirst(6))) else { v = false; break }
+            let store = LocalModelStore.shared
+            if !LocalModelStore.isInstalled(m), ProcessInfo.processInfo.environment["MURMUR_E2E_INSTALL_MODELS"] == "1" {
+                log("  installing \(m.label)…")
+                let t0 = Date()
+                store.install(m)
+                var last = ""
+                while case .installing(let p, let step) = store.state(m) {
+                    let line = "\(Int(p * 100))% \(step)"
+                    if line != last { log("    \(line)"); last = line }
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+                log("  install → \(store.state(m)) in \(Int(Date().timeIntervalSince(t0)))s")
+            }
+            v = LocalModelStore.isInstalled(m)
         default:
             v = true
         }
@@ -154,6 +173,7 @@ enum E2E {
         var cfg = AppSettings.shared.config
         cfg.engine = c.engine ?? .apple
         cfg.appleModel = c.appleModel ?? .speech
+        cfg.localModel = c.localModel ?? .parakeetV3
         cfg.vocabulary = c.vocabulary ?? []
         cfg.cleanupEnabled = c.cleanup != nil
         cfg.cleanupEngine = c.cleanup ?? .apple
@@ -403,6 +423,8 @@ enum E2E {
         for (scheme, appearance) in [("light", NSAppearance(named: .aqua)), ("dark", NSAppearance(named: .darkAqua))] {
             NSApp.appearance = appearance
             AppSettings.shared.config.cleanupEnabled = true
+            AppSettings.shared.config.engine = .local
+            AppSettings.shared.config.localModel = .parakeetV3
             AppSettings.shared.config.vocabulary = [
                 VocabTerm(term: "Kubernetes", soundsLike: ["cooper netties"]),
                 VocabTerm(term: "JQ Reyes", soundsLike: ["jay queue reyes"]),

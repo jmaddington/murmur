@@ -74,6 +74,38 @@ fn squash(s: &str) -> String {
     s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
 }
 
+/// Rough sound-alike key: consonant classes in order, vowels and h/w/y
+/// dropped (except a leading vowel), repeats collapsed. "JQ Reyes" and
+/// "jq raze" → JKRS; "Kubernetes" and "cooper netties" → KPRNTS.
+fn phonetic(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::new();
+    let mut prev = '_';
+    for (i, &c) in chars.iter().enumerate() {
+        let next = chars.get(i + 1).copied().unwrap_or(' ');
+        let k = match c {
+            'b' | 'p' => 'P',
+            'f' | 'v' => 'F',
+            'c' if "eiy".contains(next) => 'S',
+            'c' | 'k' | 'q' | 'g' => 'K',
+            's' | 'z' | 'x' => 'S',
+            'd' | 't' => 'T',
+            'm' | 'n' => 'N',
+            'j' => 'J',
+            'l' => 'L',
+            'r' => 'R',
+            'a' | 'e' | 'i' | 'o' | 'u' if i == 0 => 'A',
+            d if d.is_ascii_digit() => d,
+            _ => '_',
+        };
+        if k != '_' && k != prev {
+            out.push(k);
+        }
+        prev = k;
+    }
+    out
+}
+
 fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -97,11 +129,17 @@ fn fuzzy_replace(text: &str, phrase: &str, term: &str, protected: &[String]) -> 
     let target = squash(phrase);
     let target_len = target.chars().count();
     let n_words = phrase.split_whitespace().count().max(1);
-    if target_len < 8 {
+    if target_len < 5 {
         return text.to_string();
     }
-    // ~1 edit per 5 letters: "kubernettis" → "Kubernetes", "coopernettis" → "cooper netties".
-    let max_dist = ((target_len + 2) / 5).max(1);
+    // Spelling: ~1 edit per 5 letters ("kubernettis" → "Kubernetes"), and
+    // only for phrases of 8+ letters so short common words stay safe.
+    let max_dist = if target_len >= 8 { ((target_len + 2) / 5).max(1) } else { 0 };
+    // Sound: same phonetic key (4+ sounds), same first letter, and still
+    // reasonably close in spelling: "jq raze" → "JQ Reyes".
+    let target_key = phonetic(&target);
+    let target_first = target.chars().next();
+    let sound_dist = if target_key.chars().count() >= 4 { target_len / 2 } else { 0 };
     let term_squashed = squash(term);
     let word_re = Regex::new(r"[\w'’.\-]+").unwrap();
     let words: Vec<regex::Match> = word_re.find_iter(text).collect();
@@ -118,11 +156,15 @@ fn fuzzy_replace(text: &str, phrase: &str, term: &str, protected: &[String]) -> 
             if candidate.contains(&term_squashed) || protected.contains(&candidate) {
                 continue;
             }
-            if candidate.chars().count().abs_diff(target_len) > max_dist {
+            if candidate.chars().count().abs_diff(target_len) > max_dist.max(sound_dist) {
                 continue;
             }
             let dist = levenshtein(&candidate, &target);
-            if dist <= max_dist {
+            let sounds_alike = sound_dist > 0
+                && dist <= sound_dist
+                && candidate.chars().next() == target_first
+                && phonetic(&candidate) == target_key;
+            if (max_dist > 0 && dist <= max_dist) || sounds_alike {
                 candidates.push((dist, pref, i, span));
             }
         }
@@ -280,6 +322,23 @@ mod tests {
         // …in either order.
         let v = vec![t("Christiansen", &[]), t("Christensen", &[])];
         assert_eq!(apply("Christensen met christiansen", &v), "Christensen met Christiansen");
+    }
+
+    #[test]
+    fn sound_alike_mishearings() {
+        let v = vec![t("JQ Reyes", &[]), t("Kubernetes", &["cooper netties"])];
+        assert_eq!(apply("Can you ask JQ Raze to look?", &v), "Can you ask JQ Reyes to look?");
+        assert_eq!(apply("ask jay queue rays", &[t("JQ Reyes", &["jay queue reyes"])]), "ask JQ Reyes");
+        assert_eq!(apply("deploy to cooper nettys now", &v), "deploy to Kubernetes now");
+    }
+
+    #[test]
+    fn sound_alike_leaves_ordinary_words() {
+        let v = vec![t("Murmur", &[]), t("Rachel", &[]), t("Kubernetes", &[])];
+        for s in ["I need more more time", "the more mature option", "a rich hell of a day",
+                  "Can you ask JQ Raze to look?", "Rochelle is here", "cabernet sauvignon"] {
+            assert_eq!(apply(s, &v), s, "{s}");
+        }
     }
 
     #[test]

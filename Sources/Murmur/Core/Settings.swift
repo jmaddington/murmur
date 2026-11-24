@@ -66,11 +66,12 @@ enum TriggerKind: String, Codable, CaseIterable, Identifiable {
 }
 
 enum TranscriptionEngine: String, Codable, CaseIterable, Identifiable {
-    case apple, openrouter, openaiCompatible
+    case apple, local, openrouter, openaiCompatible
     var id: String { rawValue }
     var label: String {
         switch self {
         case .apple: "On-device"
+        case .local: "Open models"
         case .openrouter: "OpenRouter"
         case .openaiCompatible: "Custom server"
         }
@@ -78,6 +79,7 @@ enum TranscriptionEngine: String, Codable, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .apple: "Apple's speech model. Private, instant, works offline."
+        case .local: "Parakeet or Voxtral, downloaded once and run on this Mac. Private and offline."
         case .openrouter: "Audio-capable models such as Gemini or GPT-4o via OpenRouter."
         case .openaiCompatible: "Any OpenAI-compatible /audio/transcriptions endpoint — a local whisper.cpp server, Groq, OpenAI."
         }
@@ -85,6 +87,7 @@ enum TranscriptionEngine: String, Codable, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .apple: "lock.shield"
+        case .local: "cpu"
         case .openrouter: "globe"
         case .openaiCompatible: "server.rack"
         }
@@ -153,6 +156,7 @@ struct Config: Codable {
     // Transcription
     var engine: TranscriptionEngine = .apple
     var appleModel: AppleSpeechModel = .speech
+    var localModel: LocalModel = .parakeetV3
     var localeIdentifier: String = Locale.current.identifier(.bcp47)
     var openrouterTranscribeModel = "google/gemini-2.5-flash"
     var customTranscribeURL = "http://localhost:8080/v1"
@@ -193,7 +197,7 @@ struct Config: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         func d<T: Decodable>(_ k: CodingKeys, _ v: inout T) { if let x = try? c.decode(T.self, forKey: k) { v = x } }
         d(.triggerKind, &triggerKind); d(.triggerModifier, &triggerModifier); d(.shortcut, &shortcut)
-        d(.microphones, &microphones); d(.engine, &engine); d(.appleModel, &appleModel); d(.localeIdentifier, &localeIdentifier)
+        d(.microphones, &microphones); d(.engine, &engine); d(.appleModel, &appleModel); d(.localModel, &localModel); d(.localeIdentifier, &localeIdentifier)
         d(.openrouterTranscribeModel, &openrouterTranscribeModel); d(.customTranscribeURL, &customTranscribeURL)
         d(.customTranscribeModel, &customTranscribeModel); d(.cleanupEnabled, &cleanupEnabled)
         d(.cleanupEngine, &cleanupEngine); d(.openrouterCleanupModel, &openrouterCleanupModel)

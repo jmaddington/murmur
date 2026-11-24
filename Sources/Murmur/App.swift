@@ -102,6 +102,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func prewarm() {
         let c = AppSettings.shared.config
         if c.cleanupEnabled && c.cleanupEngine == .apple { Cleanup.prewarmApple() }
+        if c.engine == .local {
+            let m = c.localModel
+            Task.detached(priority: .utility) {
+                switch m.runtime {
+                case .coreML: _ = try? await ParakeetRuntime.shared.manager(for: m.parakeetVersion!)
+                case .mlx: await MLXRuntime.shared.preload(m)
+                }
+            }
+        }
         guard c.engine == .apple else { return }
         let locale = Locale(identifier: c.localeIdentifier)
         let model = c.appleModel

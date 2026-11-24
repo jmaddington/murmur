@@ -18,6 +18,7 @@ protocol TranscriptionSession: AnyObject {
 struct PipelineConfig: Sendable {
     var engine: TranscriptionEngine
     var appleModel: AppleSpeechModel
+    var localModel: LocalModel
     var locale: Locale
     var vocabulary: [VocabTerm]
     var transcribeProvider: RemoteProvider?
@@ -33,7 +34,7 @@ struct PipelineConfig: Sendable {
     @MainActor static func current(appName: String?) -> PipelineConfig {
         let c = AppSettings.shared.config
         let transcribe: RemoteProvider? = switch c.engine {
-        case .apple: nil
+        case .apple, .local: nil
         case .openrouter: RemoteProvider(kind: .openrouter, baseUrl: nil, apiKey: Keychain.get(.openrouter), model: c.openrouterTranscribeModel)
         case .openaiCompatible: RemoteProvider(kind: .openaiCompatible, baseUrl: c.customTranscribeURL, apiKey: Keychain.get(.customTranscribe), model: c.customTranscribeModel)
         }
@@ -43,7 +44,7 @@ struct PipelineConfig: Sendable {
         case .openaiCompatible: RemoteProvider(kind: .openaiCompatible, baseUrl: c.customCleanupURL, apiKey: Keychain.get(.customCleanup), model: c.customCleanupModel)
         }
         return PipelineConfig(
-            engine: c.engine, appleModel: c.appleModel, locale: Locale(identifier: c.localeIdentifier),
+            engine: c.engine, appleModel: c.appleModel, localModel: c.localModel, locale: Locale(identifier: c.localeIdentifier),
             vocabulary: c.vocabulary.filter { !$0.term.trimmingCharacters(in: .whitespaces).isEmpty },
             transcribeProvider: transcribe, cleanupEnabled: c.cleanupEnabled, cleanupEngine: c.cleanupEngine,
             cleanupProvider: cleanup, cleanupSendsAudio: c.cleanupSendsAudio, cleanupStyle: c.cleanupStyle,
@@ -62,6 +63,7 @@ struct PipelineConfig: Sendable {
     var engineLabel: String {
         switch engine {
         case .apple: "On-device (\(appleModel.label))"
+        case .local: localModel.label
         case .openrouter, .openaiCompatible: "\(engine.label) · \(transcribeProvider?.model ?? "")"
         }
     }
@@ -77,6 +79,8 @@ struct PipelineConfig: Sendable {
     func makeSession() -> TranscriptionSession {
         switch engine {
         case .apple: AppleSpeechSession(locale: locale, model: appleModel, vocabulary: vocabulary)
+        case .local where localModel.runtime == .coreML: ParakeetSession(model: localModel)
+        case .local: MLXSession(model: localModel)
         case .openrouter, .openaiCompatible: RemoteSession(provider: transcribeProvider!, vocabulary: vocabulary, locale: locale)
         }
     }

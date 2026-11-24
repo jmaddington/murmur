@@ -213,6 +213,7 @@ struct TranscriptionPane: View {
                 }
                 switch settings.config.engine {
                 case .apple: appleSection
+                case .local: LocalModelsSection(selection: $settings.config.localModel)
                 case .openrouter: openRouterSection
                 case .openaiCompatible: customSection
                 }
@@ -852,5 +853,76 @@ struct PromptEditor: View {
         } else {
             prompt += (prompt.hasSuffix("\n") || prompt.isEmpty ? "" : " ") + token
         }
+    }
+}
+
+// MARK: - Open models
+
+struct LocalModelsSection: View {
+    @Binding var selection: LocalModel
+    var store = LocalModelStore.shared
+
+    var body: some View {
+        Section {
+            ForEach(LocalModel.allCases) { m in row(m) }
+        } header: {
+            Text("Open models")
+        } footer: {
+            Text("Models are stored in ~/Library/Application Support/Murmur/Models. Voxtral runs in a private Python environment Murmur sets up with uv — nothing is installed system-wide.")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+        .onAppear { store.refresh() }
+    }
+
+    @ViewBuilder private func row(_ m: LocalModel) -> some View {
+        let state = store.state(m)
+        let selected = selection == m
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                .font(.system(size: 16))
+                .foregroundStyle(selected ? Theme.accent : Color.secondary)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(m.label).font(.system(size: 13, weight: .semibold))
+                    Text(m.vendor).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                Text(m.detail).font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if m.comfortableRAM > 0 && store.physicalMemory < m.comfortableRAM {
+                    Label("This Mac has \(store.physicalMemory >> 30) GB of memory; expect a few seconds per dictation.",
+                          systemImage: "tortoise").font(.system(size: 11)).foregroundStyle(.orange)
+                }
+                if case .installing(let p, let step) = state {
+                    HStack(spacing: 8) {
+                        ProgressView(value: p).frame(maxWidth: 220)
+                        Text(step).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    .padding(.top, 2)
+                }
+                if case .failed(let why) = state {
+                    Text(why).font(.system(size: 11)).foregroundStyle(.red).lineLimit(3).textSelection(.enabled)
+                }
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 6) {
+                switch state {
+                case .ready:
+                    StatusPill(text: "Ready", tone: .good)
+                    Button("Remove", role: .destructive) { store.remove(m) }
+                        .buttonStyle(.link).font(.system(size: 11))
+                case .installing:
+                    Button("Cancel") { store.cancelInstall(m) }.controlSize(.small)
+                case .notInstalled, .failed:
+                    Button { store.install(m); selection = m } label: {
+                        Label("Download · \(m.downloadSize)", systemImage: "arrow.down.circle")
+                    }
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture { selection = m }
     }
 }

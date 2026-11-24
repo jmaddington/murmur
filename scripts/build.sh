@@ -39,6 +39,7 @@ fi
 cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # UI sounds (regenerate with: swift scripts/make-sounds.swift Resources/Sounds)
 cp -R Resources/Sounds "$APP/Contents/Resources/Sounds"
+cp Resources/mlx_worker.py "$APP/Contents/Resources/"
 # Resource bundles from Swift package dependencies (FluidAudio).
 for b in "$(dirname "$BIN")"/*.bundle(N); do cp -R "$b" "$APP/Contents/Resources/"; done
 
