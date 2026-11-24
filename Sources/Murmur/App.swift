@@ -77,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DictationController.shared.install()
         prewarm()
         Sound.preload()
+        UpdateCheck.shared.refreshIfStale()
         if !AppSettings.shared.config.hasOnboarded {
             AppSettings.shared.config.hasOnboarded = true
             SettingsWindowController.shared.show(.home)
@@ -165,10 +166,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         menu.addItem(.separator())
+        let version = NSMenuItem(title: "Murmur \(UpdateCheck.currentVersion) (build \(UpdateCheck.currentBuild))", action: nil, keyEquivalent: "")
+        version.isEnabled = false
+        menu.addItem(version)
+        if let latest = UpdateCheck.shared.newerVersion {
+            let update = NSMenuItem(title: "Update available: \(latest) — Download…", action: #selector(openLatestRelease), keyEquivalent: "")
+            update.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: nil)
+            menu.addItem(update)
+        }
+        UpdateCheck.shared.refreshIfStale()
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "Quit Murmur", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         for item in menu.items where item.action != #selector(NSApplication.terminate(_:)) { item.target = self }
     }
+
+    @objc private func openLatestRelease() { NSWorkspace.shared.open(UpdateCheck.releasesURL) }
 
     @objc private func grantAccessibility() {
         TextInserter.requestAccessibility()
@@ -204,5 +217,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: "Murmur")
         img?.isTemplate = true
         statusItem?.button?.image = img
+    }
+}
+
+/// Compares this build with the newest GitHub release (public API, no
+/// identifiers sent). Checked at launch and when the menu opens, at most
+/// every 10 minutes.
+@MainActor
+final class UpdateCheck {
+    static let shared = UpdateCheck()
+    static let releasesURL = URL(string: "https://github.com/jmaddington/murmur/releases/latest")!
+    private static let api = URL(string: "https://api.github.com/repos/jmaddington/murmur/releases/latest")!
+
+    static var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev" }
+    static var currentBuild: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0" }
+
+    private(set) var latest: String?
+    private var checkedAt: Date?
+    private var inFlight = false
+
+    /// The latest release's version when it's newer than this build.
+    var newerVersion: String? {
+        guard let latest, Self.isNewer(latest, than: Self.currentVersion) else { return nil }
+        return latest
+    }
+
+    func refreshIfStale() {
+        guard !E2E.isActive, !inFlight, checkedAt.map({ Date().timeIntervalSince($0) > 600 }) ?? true else { return }
+        inFlight = true
+        Task {
+            defer { inFlight = false }
+            var req = URLRequest(url: Self.api, timeoutInterval: 10)
+            req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            req.setValue("Murmur", forHTTPHeaderField: "User-Agent")
+            guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                  (resp as? HTTPURLResponse)?.statusCode == 200,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = obj["tag_name"] as? String else { return }
+            latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+            checkedAt = Date()
+        }
+    }
+
+    /// Numeric dotted-version comparison ("0.1.10" > "0.1.9").
+    static func isNewer(_ a: String, than b: String) -> Bool {
+        let pa = a.split(separator: ".").map { Int($0) ?? 0 }
+        let pb = b.split(separator: ".").map { Int($0) ?? 0 }
+        for i in 0..<max(pa.count, pb.count) {
+            let x = i < pa.count ? pa[i] : 0, y = i < pb.count ? pb[i] : 0
+            if x != y { return x > y }
+        }
+        return false
     }
 }
