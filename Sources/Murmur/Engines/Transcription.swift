@@ -26,6 +26,8 @@ struct PipelineConfig: Sendable {
     var cleanupProvider: RemoteProvider?
     var cleanupSendsAudio: Bool
     var cleanupStyle: String
+    /// nil = built-in prompt.
+    var cleanupCustomPrompt: String?
     var appName: String?
 
     @MainActor static func current(appName: String?) -> PipelineConfig {
@@ -45,7 +47,16 @@ struct PipelineConfig: Sendable {
             vocabulary: c.vocabulary.filter { !$0.term.trimmingCharacters(in: .whitespaces).isEmpty },
             transcribeProvider: transcribe, cleanupEnabled: c.cleanupEnabled, cleanupEngine: c.cleanupEngine,
             cleanupProvider: cleanup, cleanupSendsAudio: c.cleanupSendsAudio, cleanupStyle: c.cleanupStyle,
+            cleanupCustomPrompt: c.cleanupUseCustomPrompt ? c.cleanupCustomPrompt : nil,
             appName: c.cleanupUsesAppContext ? appName : nil)
+    }
+
+    func promptContext(withAudio: Bool, now: Date = .now) -> RustCore.PromptContext {
+        RustCore.PromptContext(
+            vocabulary: vocabulary, style: cleanupStyle, appName: appName, withAudio: withAudio,
+            customPrompt: cleanupCustomPrompt,
+            date: now.formatted(date: .complete, time: .omitted),
+            time: now.formatted(date: .omitted, time: .shortened))
     }
 
     var engineLabel: String {
@@ -348,7 +359,7 @@ enum Cleanup {
         switch config.cleanupEngine {
         case .apple:
             if let why = appleAvailability { throw CaptureError(message: why) }
-            let system = RustCore.cleanupSystemPrompt(vocab: config.vocabulary, style: config.cleanupStyle, appName: config.appName)
+            let system = RustCore.cleanupSystemPrompt(config.promptContext(withAudio: false))
             let session = LanguageModelSession(instructions: system)
             let response = try await session.respond(
                 to: RustCore.cleanupUserPrompt(text),
@@ -364,12 +375,11 @@ enum Cleanup {
                 wavPath = wav.path
             }
             defer { if let wavPath { try? FileManager.default.removeItem(atPath: wavPath) } }
-            struct Ctx: Encodable, Sendable { let vocabulary: [VocabTerm]; let style: String; let appName: String? }
-            struct A: Encodable, Sendable { let provider: RemoteProvider; let text: String; let context: Ctx; let wavPath: String? }
+            struct A: Encodable, Sendable { let provider: RemoteProvider; let text: String; let context: RustCore.PromptContext; let wavPath: String? }
             return try await RustCore.callAsync(
                 "cleanup",
                 A(provider: provider, text: text,
-                  context: Ctx(vocabulary: config.vocabulary, style: config.cleanupStyle, appName: config.appName),
+                  context: config.promptContext(withAudio: wavPath != nil),
                   wavPath: wavPath),
                 as: RustCore.TextResult.self
             ).text

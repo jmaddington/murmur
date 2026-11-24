@@ -167,6 +167,9 @@ struct Config: Codable {
     var customCleanupModel = "llama3.2"
     var cleanupStyle = ""
     var cleanupUsesAppContext = true
+    /// When on, `cleanupCustomPrompt` replaces the built-in cleanup prompt.
+    var cleanupUseCustomPrompt = false
+    var cleanupCustomPrompt = ""
 
     // Vocabulary
     var vocabulary: [VocabTerm] = []
@@ -197,6 +200,7 @@ struct Config: Codable {
         d(.cleanupSendsAudio, &cleanupSendsAudio); d(.customCleanupURL, &customCleanupURL)
         d(.customCleanupModel, &customCleanupModel); d(.cleanupStyle, &cleanupStyle)
         d(.cleanupUsesAppContext, &cleanupUsesAppContext); d(.vocabulary, &vocabulary)
+        d(.cleanupUseCustomPrompt, &cleanupUseCustomPrompt); d(.cleanupCustomPrompt, &cleanupCustomPrompt)
         d(.audioRetentionDays, &audioRetentionDays); d(.transcriptRetentionDays, &transcriptRetentionDays)
         d(.playSounds, &playSounds); d(.soundStyle, &soundStyle); d(.soundVolume, &soundVolume); d(.restoreClipboard, &restoreClipboard); d(.hasOnboarded, &hasOnboarded)
     }

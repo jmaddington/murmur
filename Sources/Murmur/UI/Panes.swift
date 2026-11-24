@@ -364,6 +364,7 @@ struct CleanupPane: View {
                                 }
                         }
                     }
+                    promptSection
                     playground
                 }
             }
@@ -410,6 +411,41 @@ struct CleanupPane: View {
                 LabeledContent("API key") { KeychainField(account: .customCleanup, prompt: "Optional") }
             }
         }
+    }
+
+    @ViewBuilder private var promptSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { settings.config.cleanupUseCustomPrompt },
+                set: { on in
+                    if on && settings.config.cleanupCustomPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        settings.config.cleanupCustomPrompt = RustCore.promptInfo.defaultTemplate
+                    }
+                    withAnimation { settings.config.cleanupUseCustomPrompt = on }
+                })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Write my own prompt").font(.system(size: 13, weight: .semibold))
+                    Text("Replaces the built-in instructions. Your transcript is always sent separately as the message to clean.")
+                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+            if settings.config.cleanupUseCustomPrompt {
+                PromptEditor(prompt: $settings.config.cleanupCustomPrompt,
+                             hasVocabulary: !settings.config.vocabulary.isEmpty,
+                             preview: { renderedPreview })
+            }
+        } header: {
+            Text("Prompt")
+        }
+    }
+
+    /// The prompt exactly as the model would get it right now (app shown as an example).
+    private var renderedPreview: String {
+        var cfg = PipelineConfig.current(appName: settings.config.cleanupUsesAppContext ? "Slack" : nil)
+        cfg.cleanupCustomPrompt = settings.config.cleanupCustomPrompt
+        let audio = settings.config.cleanupSendsAudio && settings.config.cleanupEngine == .openrouter
+        return RustCore.cleanupSystemPrompt(cfg.promptContext(withAudio: audio))
     }
 
     private var playground: some View {
@@ -734,5 +770,87 @@ private struct HistoryCard: View {
         }
         .buttonStyle(.borderless)
         .help(help)
+    }
+}
+
+// MARK: - Prompt editor
+
+struct PromptEditor: View {
+    @Binding var prompt: String
+    var hasVocabulary: Bool
+    var preview: () -> String
+    @ViewState private var selection: TextSelection?
+    @ViewState private var showPreview = false
+
+    private var mentionsVocabulary: Bool {
+        let p = prompt.lowercased().replacingOccurrences(of: " ", with: "")
+        return ["{{vocabulary}}", "{{vocabulary_section}}", "{{terms}}"].contains { p.contains($0) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextEditor(text: $prompt, selection: $selection)
+                .font(.system(size: 12, design: .monospaced))
+                .frame(minHeight: 220)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 8).fill(.background))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary))
+
+            Text("Placeholders — click to insert at the cursor")
+                .font(.system(size: 11.5, weight: .medium)).foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 6, alignment: .leading)], alignment: .leading, spacing: 6) {
+                ForEach(RustCore.promptInfo.placeholders, id: \.self) { p in
+                    Button { insert("{{\(p.name)}}") } label: {
+                        Text("{{\(p.name)}}")
+                            .font(.system(size: 11, design: .monospaced))
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(Capsule().fill(Theme.accent.opacity(0.1)))
+                            .foregroundStyle(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .help(p.description)
+                }
+            }
+
+            if hasVocabulary && !mentionsVocabulary {
+                Label("This prompt doesn't use your vocabulary. Add {{vocabulary_section}} so the model spells your terms right. (Murmur still corrects them after cleanup.)",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11.5)).foregroundStyle(.orange)
+            }
+
+            HStack {
+                Button("Reset to built-in") { prompt = RustCore.promptInfo.defaultTemplate }
+                    .disabled(prompt == RustCore.promptInfo.defaultTemplate)
+                Spacer()
+                Toggle("Preview", isOn: $showPreview.animation()).toggleStyle(.button)
+            }
+            .controlSize(.small)
+
+            if showPreview {
+                ScrollView {
+                    Text(preview())
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                }
+                .frame(maxHeight: 220)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.accent.opacity(0.06)))
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func insert(_ token: String) {
+        if case .selection(let range)? = selection?.indices,
+           range.lowerBound >= prompt.startIndex, range.upperBound <= prompt.endIndex {
+            let offset = prompt.distance(from: prompt.startIndex, to: range.lowerBound) + token.count
+            prompt.replaceSubrange(range, with: token)
+            let caret = prompt.index(prompt.startIndex, offsetBy: offset)
+            selection = TextSelection(insertionPoint: caret)
+        } else {
+            prompt += (prompt.hasSuffix("\n") || prompt.isEmpty ? "" : " ") + token
+        }
     }
 }

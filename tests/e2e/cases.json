@@ -132,6 +132,31 @@
     "mock": true
   },
   {
+    "name": "OpenRouter \u00b7 custom cleanup prompt with placeholders",
+    "audio": "audio/short.aiff",
+    "engine": "openrouter",
+    "cleanup": "openrouter",
+    "api_key": "test-key",
+    "model": "mock/audio-model",
+    "style": "British spelling",
+    "vocabulary": [
+      {
+        "term": "Kubernetes",
+        "sounds_like": [
+          "cooper netties"
+        ]
+      }
+    ],
+    "custom_prompt": "CUSTOM-PROMPT terms={{terms}} style={{ style }}\nToday is {{date}}.\n{{vocabulary_section}}",
+    "expect_contains": [
+      "Polished:",
+      "custom prompt ok",
+      "vocab ok",
+      "style ok"
+    ],
+    "mock": true
+  },
+  {
     "name": "OpenRouter \u00b7 bad API key surfaces a clear error",
     "audio": "audio/short.aiff",
     "engine": "openrouter",

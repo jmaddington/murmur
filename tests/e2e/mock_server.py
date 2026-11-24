@@ -63,6 +63,8 @@ class H(BaseHTTPRequestHandler):
                 if "Kubernetes" in system: tags.append("vocab ok")
                 if has_audio: tags.append("audio ok")
                 if "British" in system: tags.append("style ok")
+                if system.startswith("CUSTOM-PROMPT terms=Kubernetes style=British spelling") and "{{" not in system:
+                    tags.append("custom prompt ok")
                 out = f"<transcript>Polished: {body} [{', '.join(tags)}]</transcript>"
             return self.reply(200, {"choices": [{"message": {"role": "assistant", "content": out}}]})
         self.reply(404, {"error": {"message": "not found"}})

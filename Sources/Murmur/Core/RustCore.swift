@@ -68,10 +68,29 @@ enum RustCore {
         return (try? call("apply_vocabulary", A(text: text, vocabulary: vocab), as: TextResult.self).text) ?? text
     }
 
-    static func cleanupSystemPrompt(vocab: [VocabTerm], style: String, appName: String?) -> String {
-        struct A: Encodable { let vocabulary: [VocabTerm]; let style: String; let appName: String?; let withAudio = false }
-        return (try? call("cleanup_system_prompt", A(vocabulary: vocab, style: style, appName: appName), as: PromptResult.self).prompt) ?? ""
+    /// Everything a cleanup prompt template can draw on.
+    struct PromptContext: Encodable, Sendable {
+        var vocabulary: [VocabTerm]
+        var style: String
+        var appName: String?
+        var withAudio: Bool
+        var customPrompt: String?
+        var date: String?
+        var time: String?
     }
+
+    struct PromptPlaceholder: Codable, Sendable, Hashable { let name: String; let description: String }
+    struct PromptInfo: Codable, Sendable { let defaultTemplate: String; let placeholders: [PromptPlaceholder] }
+
+    static func cleanupSystemPrompt(_ ctx: PromptContext) -> String {
+        (try? call("cleanup_system_prompt", ctx, as: PromptResult.self).prompt) ?? ""
+    }
+
+    /// The built-in template and the placeholders custom prompts may use.
+    static let promptInfo: PromptInfo = {
+        struct A: Encodable {}
+        return (try? call("cleanup_prompt_info", A(), as: PromptInfo.self)) ?? PromptInfo(defaultTemplate: "", placeholders: [])
+    }()
 
     static func cleanupUserPrompt(_ text: String) -> String {
         struct A: Encodable { let text: String }

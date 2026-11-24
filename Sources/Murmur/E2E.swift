@@ -38,6 +38,7 @@ enum E2E {
         var transcribeModel: String?
         var cleanupSendsAudio: Bool?
         var style: String?
+        var customPrompt: String?
         var requiresEnv: String?
         var mock: Bool?
         /// Capabilities this case needs: apple_speech, apple_intelligence.
@@ -158,6 +159,8 @@ enum E2E {
         cfg.cleanupEngine = c.cleanup ?? .apple
         cfg.cleanupSendsAudio = c.cleanupSendsAudio ?? false
         cfg.cleanupStyle = c.style ?? ""
+        cfg.cleanupUseCustomPrompt = c.customPrompt != nil
+        cfg.cleanupCustomPrompt = c.customPrompt ?? ""
         if let u = c.customUrl { cfg.customTranscribeURL = u; cfg.customCleanupURL = u }
         if let m = c.model {
             cfg.openrouterTranscribeModel = m; cfg.openrouterCleanupModel = m
@@ -414,6 +417,23 @@ enum E2E {
                 try? await Task.sleep(for: .milliseconds(900))
                 snapshot(SettingsWindowController.shared.window, to: dir.appendingPathComponent("\(scheme)-pane-\(pane.rawValue).png"))
             }
+            // Custom cleanup prompt editor (below the fold: scroll the form to the end).
+            AppSettings.shared.config.cleanupUseCustomPrompt = true
+            AppSettings.shared.config.cleanupCustomPrompt = "You polish dictated text for {{app}}.\n\nRules:\n- Remove fillers and false starts.\n- Keep my wording.\n- Output only the cleaned text.{{vocabulary_section}}{{style_section}}"
+            SettingsNavigation.shared.pane = .cleanup
+            try? await Task.sleep(for: .milliseconds(900))
+            if let root = SettingsWindowController.shared.window?.contentView {
+                func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(scrollViews) }
+                if let sv = scrollViews(root).max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }),
+                   let doc = sv.documentView {
+                    let y = doc.isFlipped ? max(0, doc.frame.height - sv.contentView.bounds.height) - 140 : 140
+                    sv.contentView.scroll(to: NSPoint(x: 0, y: y))
+                    sv.reflectScrolledClipView(sv.contentView)
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(600))
+            snapshot(SettingsWindowController.shared.window, to: dir.appendingPathComponent("\(scheme)-pane-cleanup-prompt.png"))
+            AppSettings.shared.config.cleanupUseCustomPrompt = false
             SettingsWindowController.shared.window?.orderOut(nil)
 
             let ctl = DictationController.shared

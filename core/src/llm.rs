@@ -215,6 +215,9 @@ pub fn cleanup(a: &CleanupArgs) -> Result<String, String> {
         style: a.context.style.clone(),
         app_name: a.context.app_name.clone(),
         with_audio,
+        custom_prompt: a.context.custom_prompt.clone(),
+        date: a.context.date.clone(),
+        time: a.context.time.clone(),
     };
     let user_text = prompts::cleanup_user(&a.text);
     let user_content = if with_audio {

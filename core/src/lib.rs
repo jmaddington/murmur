@@ -27,6 +27,12 @@ fn dispatch(input: &str) -> Result<Value, String> {
             let a: prompts::CleanupContext = from(args()?)?;
             Ok(json!({ "prompt": prompts::cleanup_system(&a) }))
         }
+        "cleanup_prompt_info" => Ok(json!({
+            "default_template": prompts::DEFAULT_TEMPLATE,
+            "placeholders": prompts::PLACEHOLDERS.iter()
+                .map(|(name, description)| json!({ "name": name, "description": description }))
+                .collect::<Vec<_>>(),
+        })),
         "cleanup_user_prompt" => {
             let a: prompts::UserPromptArgs = from(args()?)?;
             Ok(json!({ "prompt": prompts::cleanup_user(&a.text) }))
