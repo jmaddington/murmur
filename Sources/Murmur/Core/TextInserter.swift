@@ -25,6 +25,19 @@ enum TextInserter {
     static var hasAccessibility: Bool { AXIsProcessTrusted() }
 
     static func requestAccessibility() {
+        // A switched-on entry in System Settings can belong to an older build
+        // with a different signature; macOS then reports "not trusted" forever
+        // and won't prompt again. Clearing our own entry makes the prompt and
+        // the switch apply to this build.
+        if !hasAccessibility, let id = Bundle.main.bundleIdentifier {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+            p.arguments = ["reset", "Accessibility", id]
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try? p.run()
+            p.waitUntilExit()
+        }
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
     }

@@ -39,6 +39,8 @@ fi
 cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # UI sounds (regenerate with: swift scripts/make-sounds.swift Resources/Sounds)
 cp -R Resources/Sounds "$APP/Contents/Resources/Sounds"
+# Resource bundles from Swift package dependencies (FluidAudio).
+for b in "$(dirname "$BIN")"/*.bundle(N); do cp -R "$b" "$APP/Contents/Resources/"; done
 
 # Prefer an explicit identity, then any Developer ID in the keychain, else ad-hoc.
 IDENTITY=${MURMUR_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Developer ID Application/ {print $2; exit}')}
@@ -46,6 +48,11 @@ if [[ -n "$IDENTITY" ]]; then
   step "Signing Murmur.app" codesign --force --options runtime --timestamp --entitlements Resources/Murmur.entitlements --sign "$IDENTITY" "$APP"
   step "Verifying signature" codesign --verify --strict --verbose=2 "$APP"
 else
+  # Ad-hoc builds get their own bundle ID. macOS keys privacy permissions
+  # (Accessibility, Microphone) by bundle ID + signature, so sharing the
+  # release ID would let a dev build steal — and silently break — the
+  # installed app's Accessibility grant.
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.internal.murmur.dev" -c "Set :CFBundleName Murmur Dev" "$APP/Contents/Info.plist"
   codesign --force --options runtime --entitlements Resources/Murmur.entitlements --sign - "$APP"
 fi
 echo "✓ $APP  (v$VERSION, signed: ${IDENTITY:-ad-hoc})"
