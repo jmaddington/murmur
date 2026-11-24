@@ -438,7 +438,8 @@ enum E2E {
         AppSettings.shared.config.labJudgeModel = "mock/judge"
         let t0 = Date()
         lab.select(entry.id)
-        var stt: Set<Lab.STT> = [.apple(.speech), .openrouter("mock/audio-model")]
+        var stt: Set<Lab.STT> = [.openrouter("mock/audio-model")]
+        if await has("apple_speech") { stt.insert(.apple(.speech)) }
         if LocalModelStore.isInstalled(.parakeetV3) { stt.insert(.local(.parakeetV3)) }
         lab.sttChoices = stt
         await lab.transcribe()

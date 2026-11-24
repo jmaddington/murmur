@@ -14,5 +14,10 @@ MURMUR_E2E_MOCK_BASE=http://127.0.0.1:8765/v1 \
   OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" build/Murmur.app/Contents/MacOS/Murmur --e2e --out "$OUT" --cases tests/e2e/cases.json --screenshots \
   > "$OUT/stdout.json" 2> >(tee "$OUT/log.txt" >&2)
 STATUS=$?
+# Surface failing cases as annotations: they're readable on the public API
+# without downloading logs.
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  grep -E "→ FAIL" "$OUT/log.txt" | sed -E 's/^\[e2e\] +→ /::error title=e2e::/' | cut -c1-900 || true
+fi
 echo "report: $OUT/report.json  screenshots: $OUT/screenshots"
 exit $STATUS
