@@ -116,15 +116,24 @@ fn audio_part(wav_path: &str) -> Result<Value, String> {
 }
 
 fn chat(provider: &Provider, messages: Value, timeout_s: u64) -> Result<String, String> {
+    chat_with_usage(provider, messages, timeout_s).map(|(text, _)| text)
+}
+
+/// Chat completion plus the provider's `usage` block (tokens, and on
+/// OpenRouter the cost in credits), or `Value::Null` when it sent none.
+fn chat_with_usage(provider: &Provider, messages: Value, timeout_s: u64) -> Result<(String, Value), String> {
     if provider.model.trim().is_empty() {
         return Err("No model selected".into());
     }
-    let body = json!({
+    let mut body = json!({
         "model": provider.model,
         "messages": messages,
         "temperature": 0,
         "stream": false,
     });
+    if provider.kind == ProviderKind::Openrouter {
+        body["usage"] = json!({ "include": true });
+    }
     let resp: Value = provider
         .request("POST", "/chat/completions", timeout_s)
         .send_json(body)
@@ -145,7 +154,7 @@ fn chat(provider: &Provider, messages: Value, timeout_s: u64) -> Result<String, 
             .join(""),
         _ => String::new(),
     };
-    Ok(text)
+    Ok((text, resp.get("usage").cloned().unwrap_or(Value::Null)))
 }
 
 pub fn transcribe(a: &TranscribeArgs) -> Result<String, String> {
@@ -209,6 +218,10 @@ fn transcribe_multipart(a: &TranscribeArgs) -> Result<String, String> {
 }
 
 pub fn cleanup(a: &CleanupArgs) -> Result<String, String> {
+    cleanup_with_usage(a).map(|(text, _)| text)
+}
+
+pub fn cleanup_with_usage(a: &CleanupArgs) -> Result<(String, Value), String> {
     let with_audio = a.wav_path.is_some() && a.provider.kind == ProviderKind::Openrouter;
     let ctx = CleanupContext {
         vocabulary: a.context.vocabulary.clone(),
@@ -229,9 +242,48 @@ pub fn cleanup(a: &CleanupArgs) -> Result<String, String> {
         { "role": "system", "content": prompts::cleanup_system(&ctx) },
         { "role": "user", "content": user_content }
     ]);
-    let out = prompts::sanitize_output(&chat(&a.provider, messages, 60)?);
+    let (raw, usage) = chat_with_usage(&a.provider, messages, 60)?;
+    let out = prompts::sanitize_output(&raw);
     // An empty answer would wipe the user's words; fall back to the input.
-    Ok(if out.is_empty() { a.text.clone() } else { out })
+    Ok((if out.is_empty() { a.text.clone() } else { out }, usage))
+}
+
+#[derive(Deserialize)]
+pub struct JudgeArgs {
+    pub provider: Provider,
+    /// What was actually said (the transcript the cleanup started from).
+    pub transcript: String,
+    pub candidate: String,
+    #[serde(default)]
+    pub vocabulary: Vec<crate::vocabulary::Term>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct Verdict {
+    pub score: f64,
+    pub notes: String,
+}
+
+/// Pull `{"score": n, "notes": "..."}` out of a judge reply, tolerating
+/// code fences and chatter around the JSON.
+pub fn parse_verdict(raw: &str) -> Option<Verdict> {
+    let start = raw.find('{')?;
+    let end = raw.rfind('}')?;
+    let v: Value = serde_json::from_str(raw.get(start..=end)?).ok()?;
+    let score = v.get("score").and_then(|s| s.as_f64().or_else(|| s.as_str()?.trim().parse().ok()))?;
+    let notes = v.get("notes").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    Some(Verdict { score: score.clamp(0.0, 10.0), notes })
+}
+
+/// Score a cleanup against the transcript it came from, for the Lab.
+pub fn judge(a: &JudgeArgs) -> Result<(Verdict, Value), String> {
+    let messages = json!([
+        { "role": "system", "content": prompts::judge_system(&a.vocabulary) },
+        { "role": "user", "content": prompts::judge_user(&a.transcript, &a.candidate) }
+    ]);
+    let (raw, usage) = chat_with_usage(&a.provider, messages, 90)?;
+    let verdict = parse_verdict(&raw).ok_or_else(|| format!("judge reply wasn't a score: {}", raw.chars().take(120).collect::<String>()))?;
+    Ok((verdict, usage))
 }
 
 pub fn list_models(p: &Provider) -> Result<Vec<ModelInfo>, String> {
@@ -257,4 +309,20 @@ pub fn list_models(p: &Provider) -> Result<Vec<ModelInfo>, String> {
         .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(models)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_judge_replies() {
+        assert_eq!(parse_verdict(r#"{"score": 8, "notes": "Good."}"#), Some(Verdict { score: 8.0, notes: "Good.".into() }));
+        assert_eq!(
+            parse_verdict("```json\n{\"score\": \"7.5\", \"notes\": \"Kept a filler\"}\n```"),
+            Some(Verdict { score: 7.5, notes: "Kept a filler".into() })
+        );
+        assert_eq!(parse_verdict(r#"{"score": 14}"#).map(|v| v.score), Some(10.0));
+        assert_eq!(parse_verdict("I'd say 8/10"), None);
+    }
 }

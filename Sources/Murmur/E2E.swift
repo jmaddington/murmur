@@ -141,6 +141,7 @@ enum E2E {
             }
         }
 
+        if let r = await labTest() { results.append(r) }
         results.append(settingsMutationTest())
         results.append(contentsOf: await microphoneTests())
 
@@ -417,12 +418,68 @@ enum E2E {
         return out
     }
 
+    // MARK: Lab
+
+    /// Drive the Lab like a user: pick a recording, transcribe it with several
+    /// engines, polish the result with a model × prompt grid, judge, rank.
+    @MainActor private static func labTest() async -> Result? {
+        guard let base = ProcessInfo.processInfo.environment["MURMUR_E2E_MOCK_BASE"] else { return nil }
+        log("case Lab · replay, model × prompt grid, judge")
+        HistoryStore.shared.reload()
+        let lab = Lab.shared
+        guard let entry = lab.entries.first(where: { !$0.rawText.isEmpty }) else {
+            return Result(name: "Lab", passed: false, raw: "", final: "", seconds: 0, notes: ["no history entry with audio"])
+        }
+        setenv("MURMUR_OPENROUTER_BASE", base, 1)
+        Keychain.set("test-key", for: .openrouter)
+        AppSettings.shared.config.vocabulary = [VocabTerm(term: "Kubernetes", soundsLike: ["cooper netties"])]
+        AppSettings.shared.config.cleanupStyle = "British spelling"
+        AppSettings.shared.config.labPrompt = "CUSTOM-PROMPT terms={{terms}} style={{style}}"
+        AppSettings.shared.config.labJudgeModel = "mock/judge"
+        let t0 = Date()
+        lab.select(entry.id)
+        var stt: Set<Lab.STT> = [.apple(.speech), .openrouter("mock/audio-model")]
+        if LocalModelStore.isInstalled(.parakeetV3) { stt.insert(.local(.parakeetV3)) }
+        lab.sttChoices = stt
+        await lab.transcribe()
+        var notes: [String] = []
+        var ok = true
+        for r in lab.sttResults {
+            let good = r.status == .done && !r.text.isEmpty && r.seconds != nil
+            ok = ok && good
+            notes.append("stt \(r.title): \(good ? String(format: "%.2fs", r.seconds ?? 0) : "\(r.status)")")
+        }
+        if let pick = lab.sttResults.first(where: { $0.status == .done }) { lab.inputID = pick.id }
+        lab.polishers = [.openrouter("mock/text-model"), .openrouter("mock/other-model")]
+        lab.prompts = [.builtIn, .lab]
+        lab.judge = true
+        await lab.polish()
+        let done = lab.cleanResults.filter { $0.status == .done }
+        let grid = done.count == 4
+        let judged = done.allSatisfy { $0.score != nil }
+        let costed = done.allSatisfy { $0.usage?.cost != nil && $0.usage?.promptTokens != nil }
+        let labPromptUsed = lab.cleanResults.filter { $0.detail == "Lab prompt" }.allSatisfy { $0.text.contains("custom prompt ok") }
+        let ranked = lab.bestPick != nil
+        ok = ok && grid && judged && costed && labPromptUsed && ranked
+        notes.append("polish grid \(done.count)/4\(grid ? " ✓" : "")")
+        notes.append("judge scores \(judged ? "✓" : "missing")")
+        notes.append("usage/cost \(costed ? "✓" : "missing")")
+        notes.append("lab prompt reached model \(labPromptUsed ? "✓" : "✗")")
+        notes.append("best pick \(lab.bestPick.map { "\($0.title) · \($0.detail)" } ?? "none")")
+        for r in lab.cleanResults where r.status != .done { notes.append("\(r.title): \(r.status)") }
+        log("  → \(ok ? "PASS" : "FAIL") Lab: \(notes)")
+        unsetenv("MURMUR_OPENROUTER_BASE")
+        return Result(name: "Lab · replay, model × prompt grid, judge", passed: ok, raw: "", final: "",
+                      seconds: Date().timeIntervalSince(t0), notes: notes)
+    }
+
     // MARK: Screenshots
 
     @MainActor private static func screenshots(to dir: URL) async {
         for (scheme, appearance) in [("light", NSAppearance(named: .aqua)), ("dark", NSAppearance(named: .darkAqua))] {
             NSApp.appearance = appearance
             AppSettings.shared.config.cleanupEnabled = true
+            AppSettings.shared.config.developerMode = true
             AppSettings.shared.config.engine = .local
             AppSettings.shared.config.localModel = .parakeetV3
             AppSettings.shared.config.vocabulary = [

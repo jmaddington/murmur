@@ -4,8 +4,12 @@ import AppKit
 import SwiftUI
 
 enum Pane: String, CaseIterable, Identifiable {
-    case home, shortcut, microphones, transcription, cleanup, vocabulary, history
+    case home, shortcut, microphones, transcription, cleanup, vocabulary, history, lab
     var id: String { rawValue }
+    /// Panes shown in the sidebar (the Lab only in developer mode).
+    @MainActor static var visible: [Pane] {
+        allCases.filter { $0 != .lab || AppSettings.shared.config.developerMode }
+    }
     var title: String {
         switch self {
         case .home: "Home"
@@ -15,6 +19,7 @@ enum Pane: String, CaseIterable, Identifiable {
         case .cleanup: "Cleanup"
         case .vocabulary: "Vocabulary"
         case .history: "History"
+        case .lab: "Lab"
         }
     }
     var symbol: String {
@@ -26,6 +31,7 @@ enum Pane: String, CaseIterable, Identifiable {
         case .cleanup: "sparkles"
         case .vocabulary: "character.book.closed.fill"
         case .history: "clock.arrow.circlepath"
+        case .lab: "flask.fill"
         }
     }
     var color: Color {
@@ -37,6 +43,7 @@ enum Pane: String, CaseIterable, Identifiable {
         case .cleanup: .purple
         case .vocabulary: .orange
         case .history: .teal
+        case .lab: .indigo
         }
     }
 }
@@ -87,7 +94,7 @@ struct SettingsRoot: View {
         NavigationSplitView {
             List(selection: $nav.pane) {
                 Section {
-                    ForEach(Pane.allCases) { p in
+                    ForEach(Pane.visible) { p in
                         Label { Text(p.title) } icon: { IconTile(symbol: p.symbol, color: p.color, size: 20) }
                             .tag(p)
                     }
@@ -105,6 +112,7 @@ struct SettingsRoot: View {
                 case .cleanup: CleanupPane()
                 case .vocabulary: VocabularyPane()
                 case .history: HistoryPane()
+                case .lab: LabPane()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -160,6 +168,7 @@ struct HomePane: View {
                 if mic != .authorized || !ax { permissions }
                 stats
                 recent
+                developer
             }
             .padding(28)
             .frame(maxWidth: 760)
@@ -252,6 +261,23 @@ struct HomePane: View {
             StatCard(value: history.averageWPM > 0 ? "\(history.averageWPM)" : "—", label: "words per minute", symbol: "speedometer", color: .orange)
             StatCard(value: history.minutesSaved > 0 ? "\(history.minutesSaved) min" : "—", label: "saved vs. typing", symbol: "hourglass", color: .teal)
         }
+    }
+
+    private var developer: some View {
+        HStack(spacing: 12) {
+            IconTile(symbol: Pane.lab.symbol, color: Pane.lab.color, size: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Developer mode").font(.system(size: 13, weight: .semibold))
+                Text("Adds the Lab: replay recent recordings through other speech models, cleanup models and prompts, side by side.")
+                    .font(.system(size: 11.5)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Toggle("", isOn: Binding(get: { settings.config.developerMode },
+                                     set: { settings.config.developerMode = $0 }))
+                .toggleStyle(.switch).labelsHidden()
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
     }
 
     private var recent: some View {
@@ -381,9 +407,22 @@ struct ShortcutPane: View {
                     }
                 } footer: {
                     if settings.config.triggerKind == .modifier && settings.config.triggerModifier == .fn {
-                        Label("Set System Settings › Keyboard › “Press 🌐 key to” to “Do Nothing” so macOS doesn't also react to fn.",
-                              systemImage: "info.circle")
-                            .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                        if let action = FnKeySetting.conflictingAction {
+                            HStack(spacing: 8) {
+                                Label("macOS is set to “\(action)” when you press 🌐/fn, which fights with Murmur. Set “Press 🌐 key to” → “Do Nothing”.",
+                                      systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                                Button("Keyboard Settings…") {
+                                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!)
+                                }
+                                .controlSize(.small)
+                            }
+                            .font(.system(size: 11.5))
+                        } else {
+                            Label("Set System Settings › Keyboard › “Press 🌐 key to” to “Do Nothing” so macOS doesn't also react to fn.",
+                                  systemImage: "info.circle")
+                                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 Section("How it works") {
@@ -443,5 +482,19 @@ private struct HowRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// What macOS does when 🌐/fn is pressed on its own (System Settings › Keyboard).
+enum FnKeySetting {
+    /// A human name for the action if macOS also reacts to fn, else nil.
+    static var conflictingAction: String? {
+        guard let v = UserDefaults(suiteName: "com.apple.HIToolbox")?.object(forKey: "AppleFnUsageType") as? Int else { return nil }
+        switch v {
+        case 1: return "Change Input Source"
+        case 2: return "Show Emoji & Symbols"
+        case 3: return "Start Dictation"
+        default: return nil
+        }
     }
 }

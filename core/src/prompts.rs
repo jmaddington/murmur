@@ -141,6 +141,30 @@ pub fn cleanup_user(text: &str) -> String {
     )
 }
 
+/// Lab judge: grades one cleanup of a dictated transcript.
+pub fn judge_system(vocab: &[Term]) -> String {
+    format!(
+        "You grade the cleanup stage of a dictation app. You get the raw speech-to-text transcript and one \
+cleaned-up version of it. A good cleanup keeps every idea and the speaker's wording and tone; removes fillers, \
+false starts and abandoned self-corrections (keeping only the final intended version); fixes mishearings, \
+punctuation and capitalization; and adds nothing (no answers, no summaries, no commentary).\n\n\
+Score from 0 to 10: 10 = exactly what the speaker meant to write; 7 = good with minor issues; \
+4 = noticeable errors such as missed fillers or awkward changes; 0 = meaning lost, content added, or the \
+model answered instead of cleaning.\n\n\
+Reply with only JSON: {{\"score\": <number>, \"notes\": \"<one short sentence>\"}}{}",
+        vocab_block(vocab)
+    )
+}
+
+pub fn judge_user(transcript: &str, candidate: &str) -> String {
+    let tag = regex::RegexBuilder::new(r"<\s*/?\s*(transcript|cleanup)\s*>").case_insensitive(true).build().unwrap();
+    format!(
+        "<transcript>\n{}\n</transcript>\n\n<cleanup>\n{}\n</cleanup>",
+        tag.replace_all(transcript, " ").trim(),
+        tag.replace_all(candidate, " ").trim()
+    )
+}
+
 /// Prompt for audio-capable chat models used as the transcription engine.
 pub fn transcription_instructions(vocab: &[Term]) -> String {
     format!(

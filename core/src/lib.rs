@@ -47,7 +47,13 @@ fn dispatch(input: &str) -> Result<Value, String> {
         }
         "cleanup" => {
             let a: llm::CleanupArgs = from(args()?)?;
-            Ok(json!({ "text": llm::cleanup(&a)? }))
+            let (text, usage) = llm::cleanup_with_usage(&a)?;
+            Ok(json!({ "text": text, "usage": usage }))
+        }
+        "judge" => {
+            let a: llm::JudgeArgs = from(args()?)?;
+            let (v, usage) = llm::judge(&a)?;
+            Ok(json!({ "score": v.score, "notes": v.notes, "usage": usage }))
         }
         "list_models" => {
             let a: llm::Provider = from(args()?)?;

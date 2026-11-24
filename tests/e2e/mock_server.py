@@ -55,6 +55,11 @@ class H(BaseHTTPRequestHandler):
             else:
                 text = user
             LOG.append({"path": self.path, "model": req["model"], "audio": has_audio})
+            usage = {"prompt_tokens": len(system) // 4 + len(text) // 4, "completion_tokens": 12, "cost": 0.0000123}
+            if "You grade the cleanup" in system:
+                score = 9 if req["model"] == "mock/judge" else 5
+                out = json.dumps({"score": score if "custom prompt ok" not in text else 8, "notes": "Faithful and clean."})
+                return self.reply(200, {"choices": [{"message": {"role": "assistant", "content": out}}], "usage": usage})
             if "Transcribe" in text or "Transcribe" in system:
                 out = "Ship the SwiftUI build tonight" + (" [audio ok]" if has_audio else " [no audio]")
             else:
@@ -66,7 +71,7 @@ class H(BaseHTTPRequestHandler):
                 if system.startswith("CUSTOM-PROMPT terms=Kubernetes style=British spelling") and "{{" not in system:
                     tags.append("custom prompt ok")
                 out = f"<transcript>Polished: {body} [{', '.join(tags)}]</transcript>"
-            return self.reply(200, {"choices": [{"message": {"role": "assistant", "content": out}}]})
+            return self.reply(200, {"choices": [{"message": {"role": "assistant", "content": out}}], "usage": usage})
         self.reply(404, {"error": {"message": "not found"}})
 
 if __name__ == "__main__":

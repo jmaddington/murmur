@@ -189,6 +189,16 @@ struct Config: Codable {
     var restoreClipboard = true
     var hasOnboarded = false
 
+    // Developer mode / Lab
+    var developerMode = false
+    var labTranscribeModels = ["openai/gpt-audio-mini", "google/gemini-3.1-flash-lite"]
+    var labCleanupModels = [
+        "anthropic/claude-haiku-5.5", "google/gemini-3.1-flash-lite", "openai/gpt-4.1-nano",
+        "mistralai/ministral-8b-2512", "mistralai/ministral-3b-2512", "meta-llama/llama-3.1-8b-instruct",
+    ]
+    var labPrompt = ""
+    var labJudgeModel = "anthropic/claude-sonnet-5.5"
+
     init() {}
 
     // Tolerant decoding so adding fields never wipes a user's settings.
@@ -207,6 +217,8 @@ struct Config: Codable {
         d(.cleanupUseCustomPrompt, &cleanupUseCustomPrompt); d(.cleanupCustomPrompt, &cleanupCustomPrompt)
         d(.audioRetentionDays, &audioRetentionDays); d(.transcriptRetentionDays, &transcriptRetentionDays)
         d(.playSounds, &playSounds); d(.soundStyle, &soundStyle); d(.soundVolume, &soundVolume); d(.restoreClipboard, &restoreClipboard); d(.hasOnboarded, &hasOnboarded)
+        d(.developerMode, &developerMode); d(.labTranscribeModels, &labTranscribeModels); d(.labCleanupModels, &labCleanupModels)
+        d(.labPrompt, &labPrompt); d(.labJudgeModel, &labJudgeModel)
     }
 }
 

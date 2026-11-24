@@ -752,6 +752,12 @@ private struct HistoryCard: View {
                 iconButton(playing ? "stop.fill" : "play.fill", playing ? "Stop" : "Play recording", action: onPlay)
                 if retrying { ProgressView().controlSize(.mini).frame(width: 26) }
                 else { iconButton("arrow.clockwise", "Transcribe again (copies result)", action: onRetry) }
+                if AppSettings.shared.config.developerMode {
+                    iconButton("flask", "Open in Lab") {
+                        Lab.shared.select(entry.id)
+                        SettingsNavigation.shared.pane = .lab
+                    }
+                }
             }
             if !entry.finalText.isEmpty {
                 iconButton(copied ? "checkmark" : "doc.on.doc", "Copy") {
