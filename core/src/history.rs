@@ -31,6 +31,15 @@ pub struct Entry {
     pub microphone: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    /// Seconds from releasing the key to the transcript being ready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcribe_seconds: Option<f64>,
+    /// Seconds spent in the cleanup model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub polish_seconds: Option<f64>,
+    /// Seconds from releasing the key to the final text being ready to type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_seconds: Option<f64>,
     /// Filled in by `list`: absolute path of the audio file if it still exists.
     #[serde(default, skip_deserializing)]
     pub audio_path: Option<String>,
@@ -211,7 +220,7 @@ mod tests {
         Entry {
             id: id.into(), created_at, duration: 1.0, raw_text: "hi".into(), cleaned_text: None,
             final_text: "Hi.".into(), engine: "apple".into(), cleanup_engine: None, app_name: None,
-            microphone: None, error: None, audio_path: None, text_purged: false,
+            microphone: None, error: None, audio_path: None, text_purged: false, transcribe_seconds: None, polish_seconds: None, latency_seconds: None,
         }
     }
 
@@ -316,5 +325,23 @@ mod tests {
         assert_eq!(r.audio_removed, 1);
         assert!(!orphan.exists());
         assert!(!tmp.path().join("empty").exists());
+    }
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::*;
+
+    #[test]
+    fn timings_round_trip_and_old_entries_still_load() {
+        let old: Entry = serde_json::from_str(r#"{"id":"a","created_at":1.0}"#).unwrap();
+        assert_eq!(old.latency_seconds, None);
+        let mut e = old.clone();
+        e.transcribe_seconds = Some(0.12);
+        e.polish_seconds = Some(0.8);
+        e.latency_seconds = Some(0.95);
+        let back: Entry = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!((back.transcribe_seconds, back.polish_seconds, back.latency_seconds), (Some(0.12), Some(0.8), Some(0.95)));
+        assert!(!serde_json::to_string(&old).unwrap().contains("latency"));
     }
 }

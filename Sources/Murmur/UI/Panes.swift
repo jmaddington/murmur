@@ -655,6 +655,7 @@ struct HistoryPane: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 10) {
+                        PerformanceCard(history: history)
                         ForEach(filtered) { e in
                             HistoryCard(entry: e, playing: player.playingID == e.id, retrying: retrying == e.id,
                                         onPlay: { player.toggle(e) },
@@ -713,6 +714,12 @@ private struct HistoryCard: View {
                     .font(.system(size: 11.5, weight: .medium)).foregroundStyle(.secondary)
                 if let app = entry.appName { meta(app, "app.badge") }
                 meta(HUDView.clock(entry.duration), "timer")
+                if let l = entry.latencySeconds {
+                    meta(String(format: "%.2f s", l), "bolt")
+                        .help([entry.transcribeSeconds.map { String(format: "Transcribe %.2f s", $0) },
+                               entry.polishSeconds.map { String(format: "Polish %.2f s", $0) },
+                               String(format: "Ready %.2f s after you let go", l)].compactMap { $0 }.joined(separator: " · "))
+                }
                 if entry.cleanedText != nil { meta("Polished", "sparkles") }
                 Spacer()
                 actions.opacity(hover ? 1 : 0)
@@ -930,5 +937,73 @@ struct LocalModelsSection: View {
         .padding(.vertical, 4)
         .contentShape(Rectangle())
         .onTapGesture { selection = m }
+    }
+}
+
+// MARK: - Performance
+
+struct PerformanceCard: View {
+    var history: HistoryStore
+    @AppStorage("murmur.performanceOpen") private var open = false
+
+    var body: some View {
+        if let overall = history.overallPerformance {
+            VStack(alignment: .leading, spacing: 10) {
+                Button { withAnimation { open.toggle() } } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: open ? "chevron.down" : "chevron.right").font(.system(size: 10)).foregroundStyle(.secondary)
+                        Label("Performance", systemImage: "gauge.with.needle").font(.system(size: 13, weight: .semibold))
+                        Spacer()
+                        Text(String(format: "Text ready %.2f s after you let go (median of %d)", overall.p50, overall.count))
+                            .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if open {
+                    PerfTable(title: "Speech engines · release → transcript", rows: history.speechPerformance, showRealtime: true)
+                    let polish = history.polishPerformance
+                    if !polish.isEmpty { PerfTable(title: "Cleanup models · time in model", rows: polish, showRealtime: false) }
+                    PerfTable(title: "End to end · release → text ready", rows: [overall], showRealtime: true)
+                    Text("Per word / per character use the text each step produced. “× real time” = seconds of speech handled per second of waiting.")
+                        .font(.system(size: 10.5)).foregroundStyle(.tertiary)
+                }
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
+        }
+    }
+}
+
+private struct PerfTable: View {
+    var title: String
+    var rows: [PerfRow]
+    var showRealtime: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased()).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(.tertiary)
+            Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 3) {
+                GridRow {
+                    Text("").gridColumnAlignment(.leading)
+                    Text("n"); Text("avg"); Text("p50"); Text("p90"); Text("ms/word"); Text("ms/char")
+                    if showRealtime { Text("× real time") }
+                }
+                .font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                ForEach(rows) { r in
+                    GridRow {
+                        Text(r.label).lineLimit(1).frame(maxWidth: 260, alignment: .leading)
+                        Text("\(r.count)")
+                        Text(String(format: "%.2f s", r.mean)).fontWeight(.semibold)
+                        Text(String(format: "%.2f", r.p50))
+                        Text(String(format: "%.2f", r.p90))
+                        Text(r.msPerWord.map { String(format: "%.0f", $0) } ?? "—")
+                        Text(r.msPerChar.map { String(format: "%.1f", $0) } ?? "—")
+                        if showRealtime { Text(r.realtime.map { String(format: $0 < 10 ? "%.1f×" : "%.0f×", $0) } ?? "—") }
+                    }
+                    .font(.system(size: 11.5)).monospacedDigit()
+                }
+            }
+        }
     }
 }

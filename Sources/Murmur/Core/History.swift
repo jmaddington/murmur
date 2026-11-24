@@ -16,6 +16,10 @@ struct HistoryEntry: Codable, Identifiable, Hashable, Sendable {
     var error: String?
     var audioPath: String?
     var textPurged: Bool = false
+    /// Timings: key release → transcript, cleanup model time, key release → final text.
+    var transcribeSeconds: Double?
+    var polishSeconds: Double?
+    var latencySeconds: Double?
 
     var date: Date { Date(timeIntervalSince1970: createdAt) }
     var wordCount: Int { finalText.split(whereSeparator: \.isWhitespace).count }
@@ -119,5 +123,65 @@ final class HistoryStore {
         let typing = Double(totalWords) / 45
         let speaking = entries.reduce(0) { $0 + $1.duration } / 60
         return max(0, Int((typing - speaking).rounded()))
+    }
+}
+
+// MARK: - Performance metrics
+
+/// Latency statistics for one speech engine or cleanup model.
+struct PerfRow: Identifiable {
+    var label: String
+    var count: Int
+    var mean: Double
+    var p50: Double
+    var p90: Double
+    /// Milliseconds per word / character of the text it produced.
+    var msPerWord: Double?
+    var msPerChar: Double?
+    /// Seconds of audio per second of processing (speech engines only).
+    var realtime: Double?
+    var id: String { label }
+}
+
+extension HistoryStore {
+    private static func percentile(_ xs: [Double], _ p: Double) -> Double {
+        let s = xs.sorted()
+        guard !s.isEmpty else { return 0 }
+        return s[min(s.count - 1, Int((Double(s.count - 1) * p).rounded()))]
+    }
+
+    private static func row(_ label: String, _ items: [(secs: Double, text: String, audio: Double?)]) -> PerfRow {
+        let secs = items.map(\.secs)
+        let withText = items.filter { !$0.text.isEmpty }
+        let words = withText.reduce(0) { $0 + $1.text.split(whereSeparator: \.isWhitespace).count }
+        let chars = withText.reduce(0) { $0 + $1.text.count }
+        let textSecs = withText.reduce(0) { $0 + $1.secs }
+        let audio = items.compactMap(\.audio).reduce(0, +)
+        return PerfRow(label: label, count: items.count, mean: secs.reduce(0, +) / Double(max(secs.count, 1)),
+                       p50: percentile(secs, 0.5), p90: percentile(secs, 0.9),
+                       msPerWord: words > 0 ? textSecs / Double(words) * 1000 : nil,
+                       msPerChar: chars > 0 ? textSecs / Double(chars) * 1000 : nil,
+                       realtime: audio > 0 && secs.reduce(0, +) > 0 ? audio / secs.reduce(0, +) : nil)
+    }
+
+    /// Per speech engine: release → transcript.
+    var speechPerformance: [PerfRow] {
+        Dictionary(grouping: entries.filter { $0.transcribeSeconds != nil }, by: \.engine)
+            .map { Self.row($0.key, $0.value.map { ($0.transcribeSeconds!, $0.rawText, $0.duration) }) }
+            .sorted { $0.mean < $1.mean }
+    }
+
+    /// Per cleanup model: time inside the model.
+    var polishPerformance: [PerfRow] {
+        Dictionary(grouping: entries.filter { $0.polishSeconds != nil && $0.cleanupEngine != nil }, by: { $0.cleanupEngine! })
+            .map { Self.row($0.key, $0.value.map { ($0.polishSeconds!, $0.cleanedText ?? "", nil) }) }
+            .sorted { $0.mean < $1.mean }
+    }
+
+    /// Everything: release → text ready.
+    var overallPerformance: PerfRow? {
+        let xs = entries.filter { $0.latencySeconds != nil }
+        guard !xs.isEmpty else { return nil }
+        return Self.row("All dictations", xs.map { ($0.latencySeconds!, $0.finalText, $0.duration) })
     }
 }

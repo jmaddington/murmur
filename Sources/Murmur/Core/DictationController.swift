@@ -280,14 +280,23 @@ final class DictationController {
                                      duration: duration, engine: config.engineLabel, appName: config.appName,
                                      microphone: mic)
             entry.audioPath = (audioURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false) ? audioURL?.path : nil
+            let clock = ContinuousClock()
+            let released = clock.now
+            func since(_ t: ContinuousClock.Instant) -> Double {
+                let d = clock.now - t
+                return Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
+            }
             do {
                 let raw = try await session.finish(samples: samples)
+                entry.transcribeSeconds = since(released)
                 entry.rawText = raw
                 var text = RustCore.applyVocabulary(raw, config.vocabulary)
                 if config.cleanupEnabled, !text.isEmpty {
                     self.phase = .processing("Polishing")
+                    let polishStart = clock.now
                     do {
                         let cleaned = try await Cleanup.run(text, config: config, samples: samples)
+                        entry.polishSeconds = since(polishStart)
                         text = RustCore.applyVocabulary(cleaned, config.vocabulary)
                         entry.cleanedText = text
                         entry.cleanupEngine = config.cleanupLabel
@@ -297,6 +306,7 @@ final class DictationController {
                     }
                 }
                 entry.finalText = text
+                entry.latencySeconds = since(released)
                 guard !text.isEmpty else {
                     entry.error = entry.error ?? "No speech detected"
                     HistoryStore.shared.save(entry)

@@ -79,10 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Sound.preload()
         UpdateCheck.shared.refreshIfStale()
         if !AppSettings.shared.config.hasOnboarded {
-            AppSettings.shared.config.hasOnboarded = true
-            SettingsWindowController.shared.show(.home)
-            // Ask straight away: without Accessibility, Murmur can only copy.
-            AccessibilityPrompt.requestOncePerLaunch()
+            SetupAssistantController.shared.show()
         }
         // Keep the menu bar badge in sync with the Accessibility grant.
         axTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
@@ -105,6 +102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if c.cleanupEnabled && c.cleanupEngine == .apple { Cleanup.prewarmApple() }
         if c.engine == .local {
             let m = c.localModel
+            // Fresh installs default to Parakeet: fetch it without being asked.
+            if m.runtime == .coreML && !LocalModelStore.isInstalled(m) { LocalModelStore.shared.install(m) }
             Task.detached(priority: .utility) {
                 switch m.runtime {
                 case .coreML: _ = try? await ParakeetRuntime.shared.manager(for: m.parakeetVersion!)
@@ -176,11 +175,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         UpdateCheck.shared.refreshIfStale()
         menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Setup Assistant…", action: #selector(openSetup), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "Quit Murmur", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         for item in menu.items where item.action != #selector(NSApplication.terminate(_:)) { item.target = self }
     }
 
+    @objc private func openSetup() { SetupAssistantController.shared.show() }
     @objc private func openLatestRelease() { NSWorkspace.shared.open(UpdateCheck.releasesURL) }
 
     @objc private func grantAccessibility() {

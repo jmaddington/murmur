@@ -154,7 +154,9 @@ struct Config: Codable {
     var microphones: [MicRecord] = []
 
     // Transcription
-    var engine: TranscriptionEngine = .apple
+    /// New installs use Parakeet v3 (downloaded automatically; Apple's model
+    /// fills in until it's ready).
+    var engine: TranscriptionEngine = .local
     var appleModel: AppleSpeechModel = .speech
     var localModel: LocalModel = .parakeetV3
     var localeIdentifier: String = Locale.current.identifier(.bcp47)
@@ -165,7 +167,7 @@ struct Config: Codable {
     // Cleanup
     var cleanupEnabled = false
     var cleanupEngine: CleanupEngine = .apple
-    var openrouterCleanupModel = "anthropic/claude-haiku-4.5"
+    var openrouterCleanupModel = "anthropic/claude-haiku-5.5"
     var cleanupSendsAudio = false
     var customCleanupURL = "http://localhost:11434/v1"
     var customCleanupModel = "llama3.2"

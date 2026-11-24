@@ -143,6 +143,7 @@ enum E2E {
 
         if let r = await labTest() { results.append(r) }
         if let r = await evalTest() { results.append(r) }
+        results.append(metricsTest())
         results.append(settingsMutationTest())
         results.append(contentsOf: await microphoneTests())
 
@@ -529,6 +530,26 @@ enum E2E {
                       seconds: Date().timeIntervalSince(t0), notes: notes)
     }
 
+    /// Every successful dictation records its timings, and the History
+    /// performance table aggregates them per engine.
+    @MainActor private static func metricsTest() -> Result {
+        log("case metrics · timings recorded and aggregated")
+        HistoryStore.shared.reload()
+        let ok = HistoryStore.shared.entries.filter { !$0.finalText.isEmpty }
+        let timed = ok.filter { $0.transcribeSeconds != nil && $0.latencySeconds != nil }
+        let polished = ok.filter { $0.cleanedText != nil }
+        let polishTimed = polished.allSatisfy { $0.polishSeconds != nil }
+        let speech = HistoryStore.shared.speechPerformance
+        let overall = HistoryStore.shared.overallPerformance
+        let perWord = speech.allSatisfy { $0.msPerWord != nil && $0.realtime != nil }
+        let pass = !ok.isEmpty && timed.count == ok.count && polishTimed && !speech.isEmpty && overall != nil && perWord
+        var notes = ["timed \(timed.count)/\(ok.count) dictations", "polish timed \(polishTimed ? "✓" : "✗")"]
+        for r in speech { notes.append(String(format: "%@: %.2fs avg, %.0f ms/word, %.0f× real time", r.label, r.mean, r.msPerWord ?? 0, r.realtime ?? 0)) }
+        if let o = overall { notes.append(String(format: "end to end p50 %.2fs p90 %.2fs", o.p50, o.p90)) }
+        log("  → \(pass ? "PASS" : "FAIL") metrics: \(notes)")
+        return Result(name: "metrics · per-dictation timings + per-engine aggregates", passed: pass, raw: "", final: "", seconds: 0, notes: notes)
+    }
+
     // MARK: Screenshots
 
     @MainActor private static func screenshots(to dir: URL) async {
@@ -547,6 +568,7 @@ enum E2E {
             SettingsWindowController.shared.show(.home)
             SettingsWindowController.shared.window?.setContentSize(NSSize(width: 960, height: 700))
             SettingsWindowController.shared.window?.center()
+            UserDefaults.standard.set(true, forKey: "murmur.performanceOpen")
             for pane in Pane.allCases {
                 SettingsNavigation.shared.pane = pane
                 try? await Task.sleep(for: .milliseconds(900))
@@ -568,6 +590,15 @@ enum E2E {
             }
             try? await Task.sleep(for: .milliseconds(600))
             snapshot(SettingsWindowController.shared.window, to: dir.appendingPathComponent("\(scheme)-pane-cleanup-prompt.png"))
+            SettingsWindowController.shared.window?.orderOut(nil)
+            // Setup Assistant, every step.
+            for step in SetupStep.allCases {
+                SetupAssistantController.shared.show(step: step)
+                try? await Task.sleep(for: .milliseconds(800))
+                snapshot(SetupAssistantController.shared.window, to: dir.appendingPathComponent("\(scheme)-setup-\(step.rawValue)-\(step).png"))
+            }
+            SetupAssistantController.shared.window?.orderOut(nil)
+            SettingsWindowController.shared.show(.lab)
             // Lab eval leaderboard (bottom of the Lab pane).
             SettingsNavigation.shared.pane = .lab
             try? await Task.sleep(for: .milliseconds(900))

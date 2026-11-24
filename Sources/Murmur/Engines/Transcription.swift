@@ -32,7 +32,15 @@ struct PipelineConfig: Sendable {
     var appName: String?
 
     @MainActor static func current(appName: String?) -> PipelineConfig {
-        let c = AppSettings.shared.config
+        var c = AppSettings.shared.config
+        // An open model that isn't downloaded yet: dictate with Apple's model
+        // meanwhile (and make sure the download is under way for small ones).
+        if c.engine == .local && !LocalModelStore.isInstalled(c.localModel) {
+            if c.localModel.runtime == .coreML, LocalModelStore.shared.state(c.localModel) == .notInstalled, !E2E.isActive {
+                LocalModelStore.shared.install(c.localModel)
+            }
+            c.engine = .apple
+        }
         let transcribe: RemoteProvider? = switch c.engine {
         case .apple, .local: nil
         case .openrouter: RemoteProvider(kind: .openrouter, baseUrl: nil, apiKey: Keychain.get(.openrouter), model: c.openrouterTranscribeModel)

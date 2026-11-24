@@ -376,12 +376,15 @@ final class LabEval {
     func csv(_ run: EvalRun) -> String {
         func q(_ s: String?) -> String { "\"" + (s ?? "").replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
         func n(_ d: Double?) -> String { d.map { String(format: "%.4f", $0) } ?? "" }
-        var lines = ["recording,stt,cleanup,stt_seconds,cleanup_seconds,total_seconds,cost_usd,score,text,notes,error"]
+        var lines = ["recording,audio_seconds,stt,cleanup,stt_seconds,cleanup_seconds,total_seconds,words,chars,ms_per_word,cost_usd,score,text,notes,error"]
         let byID = Dictionary(uniqueKeysWithValues: run.pipelines.map { ($0.id, $0) })
         for c in run.cells {
             let l: (stt: String, cleanup: String) = byID[c.pipelineID].map(Self.label) ?? (stt: c.pipelineID, cleanup: "")
-            lines.append([q(recording(c.recordingID).map(Self.title) ?? c.recordingID), q(l.stt), q(l.cleanup), n(c.sttSeconds), n(c.cleanSeconds),
-                          n(c.totalSeconds), c.cost.map { String(format: "%.8f", $0) } ?? "", n(c.score), q(c.text), q(c.notes), q(c.error)]
+            let words = (c.text ?? "").split(whereSeparator: \.isWhitespace).count
+            let msPerWord = words > 0 ? c.totalSeconds.map { $0 / Double(words) * 1000 } : nil
+            lines.append([q(recording(c.recordingID).map(Self.title) ?? c.recordingID), n(recording(c.recordingID)?.duration),
+                          q(l.stt), q(l.cleanup), n(c.sttSeconds), n(c.cleanSeconds),
+                          n(c.totalSeconds), "\(words)", "\((c.text ?? "").count)", n(msPerWord), c.cost.map { String(format: "%.8f", $0) } ?? "", n(c.score), q(c.text), q(c.notes), q(c.error)]
                 .joined(separator: ","))
         }
         return lines.joined(separator: "\n") + "\n"
