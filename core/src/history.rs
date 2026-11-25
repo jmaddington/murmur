@@ -113,7 +113,7 @@ pub fn list(root: &str) -> Result<Vec<Entry>, String> {
         .filter(|d| d.path().is_dir())
         .filter_map(|d| {
             let dir = d.path();
-            let data = fs::read(dir.join("entry.json")).ok()?;
+            let Ok(data) = fs::read(dir.join("entry.json")) else { return interrupted(&dir) };
             let mut e: Entry = serde_json::from_slice(&data).ok()?;
             // The folder name is the identity every other command addresses the
             // entry by; never trust a diverging `id` inside the JSON.
@@ -124,6 +124,38 @@ pub fn list(root: &str) -> Result<Vec<Entry>, String> {
         .collect();
     out.sort_by(|a, b| b.created_at.partial_cmp(&a.created_at).unwrap_or(std::cmp::Ordering::Equal));
     Ok(out)
+}
+
+/// A recording whose entry was never written (Murmur quit, crashed or froze
+/// mid-dictation): surface it so it can be transcribed from History. Only
+/// once the audio file has been quiet for a minute, so a dictation still in
+/// progress never shows up.
+fn interrupted(dir: &Path) -> Option<Entry> {
+    let audio = audio_file(dir)?;
+    let meta = fs::metadata(&audio).ok()?;
+    let modified = meta.modified().ok()?;
+    if modified.elapsed().map(|d| d.as_secs() < 60).unwrap_or(true) || meta.len() < 1024 {
+        return None;
+    }
+    let created = meta.created().unwrap_or(modified);
+    Some(Entry {
+        id: dir.file_name()?.to_str()?.to_string(),
+        created_at: created.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs_f64(),
+        duration: 0.0,
+        raw_text: String::new(),
+        cleaned_text: None,
+        final_text: String::new(),
+        engine: String::new(),
+        cleanup_engine: None,
+        app_name: None,
+        microphone: None,
+        error: None,
+        audio_path: Some(audio.to_string_lossy().into_owned()),
+        text_purged: false,
+        transcribe_seconds: None,
+        polish_seconds: None,
+        latency_seconds: None,
+    })
 }
 
 pub fn delete(root: &str, id: &str) -> Result<(), String> {
@@ -343,5 +375,28 @@ mod timing_tests {
         let back: Entry = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
         assert_eq!((back.transcribe_seconds, back.polish_seconds, back.latency_seconds), (Some(0.12), Some(0.8), Some(0.95)));
         assert!(!serde_json::to_string(&old).unwrap().contains("latency"));
+    }
+}
+
+#[cfg(test)]
+mod interrupted_tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_recordings_are_listed_once_quiet() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("abc");
+        fs::create_dir_all(&dir).unwrap();
+        let audio = dir.join("audio.m4a");
+        fs::write(&audio, vec![0u8; 4096]).unwrap();
+        // Fresh: could still be recording.
+        assert!(list(tmp.path().to_str().unwrap()).unwrap().is_empty());
+        // Quiet for two minutes: listed, with no text and no error.
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(120);
+        fs::File::options().write(true).open(&audio).unwrap().set_modified(old).unwrap();
+        let got = list(tmp.path().to_str().unwrap()).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "abc");
+        assert!(got[0].final_text.is_empty() && got[0].error.is_none() && got[0].audio_path.is_some());
     }
 }

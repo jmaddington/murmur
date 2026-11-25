@@ -146,6 +146,8 @@ enum E2E {
         results.append(metricsTest())
         results.append(await updateCheckTest())
         if let r = await hotkeyTest() { results.append(r) }
+        if let r = await stalledMicTest() { results.append(r) }
+        if let r = await interruptedRecordingTest() { results.append(r) }
         results.append(settingsMutationTest())
         results.append(contentsOf: await microphoneTests())
 
@@ -365,7 +367,7 @@ enum E2E {
         var working: InputDevice?
         for d in devices {
             let probe = MicrophoneSource(device: d)
-            guard (try? probe.start(recordingTo: nil)) != nil else { continue }
+            guard (try? await probe.start(recordingTo: nil)) != nil else { continue }
             try? await Task.sleep(for: .milliseconds(700))
             if probe.hasReceivedAudio { working = working ?? d } else { silent = silent ?? d }
             _ = probe.stop()
@@ -393,7 +395,7 @@ enum E2E {
             let name = "real capture · \(device.name)"
             do {
                 let safe = device.name.replacingOccurrences(of: "[^A-Za-z0-9]+", with: "-", options: .regularExpression)
-                try src.start(recordingTo: outDir.appendingPathComponent("mic-\(safe).m4a"))
+                try await src.start(recordingTo: outDir.appendingPathComponent("mic-\(safe).m4a"))
             } catch {
                 out.append(Result(name: name, passed: false, raw: "", final: "", seconds: 0, notes: [error.localizedDescription]))
                 continue
@@ -639,6 +641,100 @@ enum E2E {
         let ok = tapIgnored && held && released && toggledOn && toggledOff && latched
         log("  → \(ok ? "PASS" : "FAIL") hotkeys: \(notes)")
         return Result(name: "hotkeys · fn push-to-talk + hands-free toggle", passed: ok, raw: "", final: "", seconds: 0, notes: notes)
+    }
+
+    /// Regression for the "frozen after pressing the key" report: CoreAudio
+    /// stalling while a (Bluetooth) mic opens must never block the main
+    /// thread, must time out cleanly, and early releases must still finish.
+    @MainActor private static func stalledMicTest() async -> Result? {
+        guard Permissions.microphone == .authorized, !MicrophoneManager.shared.candidates().isEmpty else { return nil }
+        log("case stalled microphone · main thread stays responsive, timeout, early release")
+        let ctl = DictationController.shared
+        AppSettings.shared.config.engine = .apple
+        AppSettings.shared.config.cleanupEnabled = false
+        defer { MicrophoneSource.testOpenDelay = 0 }
+        func ticks(for seconds: Double) async -> Int {
+            var n = 0
+            let end = Date().addingTimeInterval(seconds)
+            while Date() < end { try? await Task.sleep(for: .milliseconds(50)); n += 1 }
+            return n
+        }
+        func settle() async {
+            for _ in 0..<100 where ctl.busy || ctl.phase == .listening { try? await Task.sleep(for: .milliseconds(100)) }
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+        var notes: [String] = []
+
+        // 1. A device that never opens (well, not for 8 s): responsive, then a clear error.
+        MicrophoneSource.testOpenDelay = 8
+        let t0 = Date()
+        ctl.begin()
+        let beganIn = Date().timeIntervalSince(t0)
+        let hudUp = ctl.phase == .listening
+        let n = await ticks(for: 1.0)
+        let responsive = beganIn < 0.2 && n >= 15
+        notes.append(String(format: "begin returned in %.0f ms, HUD %@, main thread ticks %d/20", beganIn * 1000, hudUp ? "up" : "down", n))
+        // Each enabled mic gets its own timeout before failing over to the next.
+        let mics = Double(MicrophoneManager.shared.candidates().count)
+        try? await Task.sleep(for: .seconds(MicrophoneSource.openTimeout * mics + 0.6))
+        var timedOut = false
+        if case .error(let msg) = ctl.phase { timedOut = msg.contains("didn't respond"); notes.append("after timeout: “\(msg)”") }
+        else { notes.append("after timeout: \(ctl.phase)") }
+        await settle()
+
+        // 2. Key released before the mic opened: dictation still finishes once it does.
+        MicrophoneSource.testOpenDelay = 1.0
+        ctl.begin(handsFree: false)
+        try? await Task.sleep(for: .milliseconds(300))
+        _ = ctl.stop()   // release while still opening
+        try? await Task.sleep(for: .seconds(2.0))
+        let earlyRelease = ctl.phase != .listening
+        notes.append("early release → \(earlyRelease ? "finished, not stuck listening ✓" : "stuck listening ✗")")
+        await settle()
+
+        // 3. Slow-but-working device: records normally after it opens.
+        MicrophoneSource.testOpenDelay = 1.0
+        ctl.begin(handsFree: true)
+        try? await Task.sleep(for: .seconds(2.2))
+        let recording = ctl.phase == .listening && ctl.microphoneName != nil
+        notes.append("slow open → \(recording ? "recording on \(ctl.microphoneName ?? "")" : "not recording ✗")")
+        ctl.cancel(silently: true)
+        await settle()
+
+        let ok = responsive && hudUp && timedOut && earlyRelease && recording
+        log("  → \(ok ? "PASS" : "FAIL") stalled microphone: \(notes)")
+        return Result(name: "stalled microphone · no main-thread hang", passed: ok, raw: "", final: "", seconds: Date().timeIntervalSince(t0), notes: notes)
+    }
+
+    /// A dictation interrupted by a freeze / force-quit leaves audio but no
+    /// entry. It must appear in History and transcribe with ↻.
+    @MainActor private static func interruptedRecordingTest() async -> Result? {
+        let casesDir = URL(fileURLWithPath: value("--cases") ?? ".").deletingLastPathComponent()
+        let src = casesDir.appendingPathComponent("audio/basic.aiff")
+        guard FileManager.default.fileExists(atPath: src.path) else { return nil }
+        log("case interrupted recording · listed and recoverable")
+        let id = "interrupted-" + UUID().uuidString
+        let dir = HistoryStore.shared.folder(for: id)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let audio = dir.appendingPathComponent("audio.m4a")
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/afconvert")
+        p.arguments = ["-f", "m4af", "-d", "aac", src.path, audio.path]
+        try? p.run(); p.waitUntilExit()
+        try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-180)], ofItemAtPath: audio.path)
+        HistoryStore.shared.reload()
+        guard let e = HistoryStore.shared.entries.first(where: { $0.id == id }) else {
+            return Result(name: "interrupted recording", passed: false, raw: "", final: "", seconds: 0, notes: ["not listed in History"])
+        }
+        AppSettings.shared.config.engine = .apple
+        AppSettings.shared.config.cleanupEnabled = false
+        let text = await DictationController.shared.retranscribe(e) ?? ""
+        HistoryStore.shared.reload()
+        let saved = HistoryStore.shared.entries.first { $0.id == id }
+        let ok = text.contains("Wednesday") && saved?.finalText == text && (saved?.duration ?? 0) > 1
+        let notes = ["listed with no text ✓", "↻ → “\(text)”", "saved: \(saved?.finalText.isEmpty == false ? "✓" : "✗"), duration \(String(format: "%.1f", saved?.duration ?? 0))s"]
+        log("  → \(ok ? "PASS" : "FAIL") interrupted recording: \(notes)")
+        return Result(name: "interrupted recording · listed and recoverable", passed: ok, raw: "", final: text, seconds: 0, notes: notes)
     }
 
     // MARK: Screenshots

@@ -17,13 +17,16 @@ final class MicTester {
         guard let device = MicrophoneManager.shared.candidates().first else { return }
         let src = MicrophoneSource(device: device)
         src.onLevel = { [weak self] l in Task { @MainActor in self?.level = l } }
-        do {
-            try src.start(recordingTo: nil)
-            source = src
-            deviceName = device.name
-            running = true
-        } catch {
-            deviceName = error.localizedDescription
+        source = src
+        deviceName = device.name
+        running = true
+        Task { @MainActor in
+            do { try await src.start(recordingTo: nil) } catch {
+                guard self.source === src else { return }
+                self.source = nil
+                self.running = false
+                self.deviceName = error.localizedDescription
+            }
         }
     }
 
@@ -727,6 +730,10 @@ private struct HistoryCard: View {
             Group {
                 if entry.textPurged {
                     Text("Transcript expired — audio retained").italic().foregroundStyle(.secondary)
+                } else if entry.finalText.isEmpty && entry.error == nil && entry.audioPath != nil {
+                    // Audio saved but no result: Murmur was quit or crashed mid-dictation.
+                    Label("Not transcribed — Murmur was interrupted. Click ↻ to transcribe the recording.", systemImage: "exclamationmark.arrow.circlepath")
+                        .foregroundStyle(.secondary)
                 } else if entry.finalText.isEmpty {
                     Text(entry.error ?? "No speech detected").foregroundStyle(.secondary)
                 } else {

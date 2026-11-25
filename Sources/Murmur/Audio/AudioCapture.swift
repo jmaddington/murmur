@@ -16,8 +16,11 @@ protocol AudioSource: AnyObject {
     var deviceName: String? { get }
     /// True once at least one buffer has arrived from the hardware.
     var hasReceivedAudio: Bool { get }
-    func start(recordingTo url: URL?) throws
-    /// Stops capture and returns every sample captured.
+    /// Microphones open asynchronously (off the main thread, with a timeout);
+    /// file sources start synchronously.
+    func start(recordingTo url: URL?) async throws
+    /// Stops capture and returns every sample captured. Never blocks on the
+    /// audio hardware.
     func stop() -> [Float]
 }
 
@@ -113,17 +116,55 @@ class CaptureSink {
 }
 
 /// Live microphone capture via AVAudioEngine bound to a specific CoreAudio device.
+///
+/// Every AVAudioEngine / CoreAudio call happens on this source's own serial
+/// queue, never on the caller's thread: while macOS reconfigures audio (a
+/// Bluetooth headset switching to its microphone profile, an aggregate or
+/// virtual driver stalling coreaudiod) those calls can block for a long time
+/// or forever, and on the main thread that froze the whole app.
 final class MicrophoneSource: CaptureSink, AudioSource {
+    /// How long opening the device may take before we give up on it.
+    static let openTimeout: TimeInterval = 3
+
+    private let queue = DispatchQueue(label: "murmur.microphone", qos: .userInitiated)
+    // Touched only on `queue`.
     private var engine: AVAudioEngine?
-    private let device: InputDevice?
     private var configObserver: NSObjectProtocol?
+    private var stopped = false
+
+    private let device: InputDevice?
     var deviceName: String? { device?.name }
 
     init(device: InputDevice?) {
         self.device = device
     }
 
-    func start(recordingTo url: URL?) throws {
+    func start(recordingTo url: URL?) async throws {
+        let name = deviceName ?? "The microphone"
+        let gate = OnceGate()
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            queue.async { [self] in
+                do {
+                    try openOnQueue(recordingTo: url)
+                    // Opened too late (we already gave up), or stopped meanwhile: release it.
+                    if !gate.claim() || stopped { teardownOnQueue() } else { cont.resume() }
+                } catch {
+                    if gate.claim() { cont.resume(throwing: error) }
+                }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.openTimeout) {
+                guard gate.claim() else { return }
+                NSLog("Murmur: \(name) didn't open within \(Self.openTimeout)s — CoreAudio busy")
+                cont.resume(throwing: CaptureError(message: "\(name) didn't respond — macOS audio is busy. Try again, or pick another mic."))
+            }
+        }
+    }
+
+    /// e2e only: simulate CoreAudio stalling while the device opens.
+    nonisolated(unsafe) static var testOpenDelay: TimeInterval = 0
+
+    private func openOnQueue(recordingTo url: URL?) throws {
+        if Self.testOpenDelay > 0 { Thread.sleep(forTimeInterval: Self.testOpenDelay) }
         let engine = AVAudioEngine()
         let input = engine.inputNode
         if let device, let unit = input.audioUnit {
@@ -147,21 +188,45 @@ final class MicrophoneSource: CaptureSink, AudioSource {
         try engine.start()
         self.engine = engine
         configObserver = NotificationCenter.default.addObserver(
-            // Main queue: `engine` is only ever touched there (start/stop).
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
         ) { [weak self] _ in
-            guard let self, let engine = self.engine, !engine.isRunning else { return }
-            self.onFailure?(CaptureError(message: "\(self.deviceName ?? "Microphone") disconnected"))
+            // Posted on CoreAudio's thread; inspect the engine on our queue.
+            self?.queue.async {
+                guard let self, let engine = self.engine, !self.stopped, !engine.isRunning else { return }
+                self.onFailure?(CaptureError(message: "\(self.deviceName ?? "Microphone") disconnected"))
+            }
         }
     }
 
-    func stop() -> [Float] {
+    private func teardownOnQueue() {
         if let o = configObserver { NotificationCenter.default.removeObserver(o) }
         configObserver = nil
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
-        return finish()
+    }
+
+    func stop() -> [Float] {
+        let samples = finish()
+        // Tear the engine down in the background: if CoreAudio is wedged this
+        // waits there, not on the caller (usually the main thread).
+        queue.async { [self] in
+            stopped = true
+            teardownOnQueue()
+        }
+        return samples
+    }
+}
+
+/// Lets exactly one of several racing paths win (open vs. timeout).
+final class OnceGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
     }
 }
 

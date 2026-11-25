@@ -148,27 +148,53 @@ final class DictationController {
         }
         self.session = session
 
-        pendingCandidates = injected.map { [$0] }
-            ?? MicrophoneManager.shared.candidates().map { MicrophoneSource(device: $0) }
-        var lastError: Error?
-        let started = startNextSource(session: session, lastError: &lastError)
-        guard let started else {
-            session.cancel()
-            self.session = nil
-            // Don't leave an empty folder / header-only audio file behind in History.
-            if let audioURL { try? FileManager.default.removeItem(at: audioURL.deletingLastPathComponent()) }
-            audioURL = nil
-            show(.error(lastError?.localizedDescription ?? "No microphone available."), hideAfter: 3)
-            return
+        // Files (tests, re-transcribe) start synchronously.
+        if let file = injected as? FileSource {
+            wire(file, session: session)
+            do { try file.start(recordingTo: audioURL) } catch {
+                failToOpen(session: session, error: error)
+                return
+            }
+            source = file
+            microphoneName = nil
+        } else {
+            pendingCandidates = injected.map { [$0] }
+                ?? MicrophoneManager.shared.candidates().map { MicrophoneSource(device: $0) }
         }
-        source = started
-        microphoneName = started.deviceName
-        if injected == nil { watchForSilentDevice(started) }
         startedAt = Date()
         latched = handsFree || injected != nil
         phase = .listening
         HUDController.shared.present()
         Sound.play(.start)
+
+        // Microphones open off the main thread: CoreAudio can stall for a long
+        // time while devices reconfigure (Bluetooth headsets switching modes),
+        // and the app must stay responsive. The HUD is already up; audio flows
+        // as soon as the device opens.
+        if source == nil {
+            let token = entryID
+            opening = token
+            stopWhenOpen = false
+            Task { [weak self] in
+                guard let self else { return }
+                var lastError: Error?
+                let started = await self.startNextSource(session: session, lastError: &lastError)
+                // Cancelled, or a newer dictation took over while we waited.
+                guard self.opening == token, self.entryID == token, self.phase == .listening, self.session === session else {
+                    _ = started?.stop()
+                    return
+                }
+                self.opening = nil
+                guard let started else {
+                    self.failToOpen(session: session, error: lastError)
+                    return
+                }
+                self.source = started
+                self.microphoneName = started.deviceName
+                if injected == nil { self.watchForSilentDevice(started) }
+                if self.stopWhenOpen { self.stop() }
+            }
+        }
 
         maxTimer = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.maxDuration))
@@ -177,20 +203,40 @@ final class DictationController {
     }
 
     private var pendingCandidates: [AudioSource] = []
+    /// Entry id of a dictation whose microphone is still opening.
+    private var opening: String?
+    /// The key was released (or Finish pressed) before the mic finished opening.
+    private var stopWhenOpen = false
+
+    private func wire(_ src: AudioSource, session: TranscriptionSession) {
+        src.onBuffer = { [weak session] buf in session?.append(buf) }
+        src.onLevel = { [weak self] level in
+            Task { @MainActor in self?.push(level: level) }
+        }
+        src.onFailure = { [weak self] err in
+            Task { @MainActor in self?.sourceFailed(err) }
+        }
+    }
+
+    private func failToOpen(session: TranscriptionSession, error: Error?) {
+        maxTimer?.cancel()
+        session.cancel()
+        self.session = nil
+        latched = false
+        // Don't leave an empty folder / header-only audio file behind in History.
+        if let audioURL { try? FileManager.default.removeItem(at: audioURL.deletingLastPathComponent()) }
+        audioURL = nil
+        Sound.play(.error)
+        show(.error(error?.localizedDescription ?? "No microphone available."), hideAfter: 4)
+    }
 
     /// Starts the first remaining candidate that opens successfully.
-    private func startNextSource(session: TranscriptionSession, lastError: inout Error?) -> AudioSource? {
+    private func startNextSource(session: TranscriptionSession, lastError: inout Error?) async -> AudioSource? {
         while !pendingCandidates.isEmpty {
             let src = pendingCandidates.removeFirst()
-            src.onBuffer = { [weak session] buf in session?.append(buf) }
-            src.onLevel = { [weak self] level in
-                Task { @MainActor in self?.push(level: level) }
-            }
-            src.onFailure = { [weak self] err in
-                Task { @MainActor in self?.sourceFailed(err) }
-            }
+            wire(src, session: session)
             do {
-                try src.start(recordingTo: audioURL)
+                try await src.start(recordingTo: audioURL)
                 return src
             } catch {
                 lastError = error
@@ -211,7 +257,13 @@ final class DictationController {
             NSLog("Murmur: \(src.deviceName ?? "mic") delivered no audio — failing over")
             _ = src.stop()
             var err: Error?
-            guard let next = self.startNextSource(session: session, lastError: &err) else {
+            let next = await self.startNextSource(session: session, lastError: &err)
+            // The dictation may have ended while the next device was opening.
+            guard self.phase == .listening, self.session === session, self.source === src else {
+                _ = next?.stop()
+                return
+            }
+            guard let next else {
                 self.cancel(silently: true)
                 self.show(.error("\(src.deviceName ?? "Microphone") isn't sending audio."), hideAfter: 3)
                 return
@@ -238,6 +290,7 @@ final class DictationController {
 
     func cancel(silently: Bool) {
         maxTimer?.cancel()
+        opening = nil
         _ = source?.stop()
         session?.cancel()
         source = nil
@@ -254,7 +307,12 @@ final class DictationController {
 
     @discardableResult
     func stop(insert: Bool = true) -> Task<HistoryEntry?, Never>? {
-        guard phase == .listening, let source, let session, let config else { return nil }
+        guard phase == .listening, let session, let config else { return nil }
+        guard let source else {
+            // Released before the microphone finished opening: finish as soon as it does.
+            if opening != nil { stopWhenOpen = true }
+            return nil
+        }
         maxTimer?.cancel()
         let samples = source.stop()
         let duration = Double(samples.count) / 16_000
@@ -365,6 +423,9 @@ final class DictationController {
             var text = RustCore.applyVocabulary(raw, cfg.vocabulary)
             var updated = entry
             updated.rawText = raw
+            // Interrupted recordings were never saved with these.
+            if updated.duration == 0 { updated.duration = Double(samples.count) / 16_000 }
+            if updated.engine.isEmpty { updated.engine = cfg.engineLabel }
             if cfg.cleanupEnabled, !text.isEmpty,
                let cleaned = try? await Cleanup.run(text, config: cfg, samples: samples) {
                 text = RustCore.applyVocabulary(cleaned, cfg.vocabulary)
