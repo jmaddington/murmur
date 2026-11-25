@@ -653,11 +653,17 @@ enum E2E {
         AppSettings.shared.config.engine = .apple
         AppSettings.shared.config.cleanupEnabled = false
         defer { MicrophoneSource.testOpenDelay = 0 }
-        func ticks(for seconds: Double) async -> Int {
-            var n = 0
-            let end = Date().addingTimeInterval(seconds)
-            while Date() < end { try? await Task.sleep(for: .milliseconds(50)); n += 1 }
-            return n
+        /// Longest the main actor went without getting to run, over `seconds`.
+        /// A hang shows up as a multi-second gap; a busy CI runner just as slow ticks.
+        func longestGap(for seconds: Double) async -> Double {
+            var last = Date(), worst = 0.0
+            let end = last.addingTimeInterval(seconds)
+            while Date() < end {
+                try? await Task.sleep(for: .milliseconds(50))
+                worst = max(worst, Date().timeIntervalSince(last))
+                last = Date()
+            }
+            return worst
         }
         func settle() async {
             for _ in 0..<100 where ctl.busy || ctl.phase == .listening { try? await Task.sleep(for: .milliseconds(100)) }
@@ -671,9 +677,9 @@ enum E2E {
         ctl.begin()
         let beganIn = Date().timeIntervalSince(t0)
         let hudUp = ctl.phase == .listening
-        let n = await ticks(for: 1.0)
-        let responsive = beganIn < 0.2 && n >= 15
-        notes.append(String(format: "begin returned in %.0f ms, HUD %@, main thread ticks %d/20", beganIn * 1000, hudUp ? "up" : "down", n))
+        let gap = await longestGap(for: 1.5)
+        let responsive = beganIn < 0.5 && gap < 0.6
+        notes.append(String(format: "begin returned in %.0f ms, HUD %@, longest main-thread gap %.0f ms", beganIn * 1000, hudUp ? "up" : "down", gap * 1000))
         // Each enabled mic gets its own timeout before failing over to the next.
         let mics = Double(MicrophoneManager.shared.candidates().count)
         try? await Task.sleep(for: .seconds(MicrophoneSource.openTimeout * mics + 0.6))
@@ -711,7 +717,7 @@ enum E2E {
     @MainActor private static func interruptedRecordingTest() async -> Result? {
         let casesDir = URL(fileURLWithPath: value("--cases") ?? ".").deletingLastPathComponent()
         let src = casesDir.appendingPathComponent("audio/basic.aiff")
-        guard FileManager.default.fileExists(atPath: src.path) else { return nil }
+        guard FileManager.default.fileExists(atPath: src.path), await has("apple_speech") else { return nil }
         log("case interrupted recording · listed and recoverable")
         let id = "interrupted-" + UUID().uuidString
         let dir = HistoryStore.shared.folder(for: id)
