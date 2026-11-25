@@ -175,10 +175,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         UpdateCheck.shared.refreshIfStale()
         menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Setup Assistant…", action: #selector(openSetup), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "Quit Murmur", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         for item in menu.items where item.action != #selector(NSApplication.terminate(_:)) { item.target = self }
+    }
+
+    @objc private func checkForUpdates() {
+        Task { @MainActor in
+            let result = await UpdateCheck.shared.checkNow()
+            NSApp.activate()
+            let alert = NSAlert()
+            switch result {
+            case .newer(let v):
+                alert.messageText = "Murmur \(v) is available"
+                alert.informativeText = "You have \(UpdateCheck.currentVersion). Download the new version from GitHub?"
+                alert.addButton(withTitle: "Download")
+                alert.addButton(withTitle: "Later")
+                if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(UpdateCheck.releasesURL) }
+            case .upToDate:
+                alert.messageText = "You're up to date"
+                alert.informativeText = "Murmur \(UpdateCheck.currentVersion) (build \(UpdateCheck.currentBuild)) is the latest version."
+                alert.runModal()
+            case .failed(let why):
+                alert.messageText = "Couldn't check for updates"
+                alert.informativeText = why
+                alert.alertStyle = .warning
+                alert.runModal()
+            }
+        }
     }
 
     @objc private func openSetup() { SetupAssistantController.shared.show() }
@@ -245,18 +271,31 @@ final class UpdateCheck {
 
     func refreshIfStale() {
         guard !E2E.isActive, !inFlight, checkedAt.map({ Date().timeIntervalSince($0) > 600 }) ?? true else { return }
+        Task { _ = await checkNow() }
+    }
+
+    enum Outcome { case upToDate, newer(String), failed(String) }
+
+    /// Ask GitHub for the newest release right now.
+    func checkNow() async -> Outcome {
         inFlight = true
-        Task {
-            defer { inFlight = false }
-            var req = URLRequest(url: Self.api, timeoutInterval: 10)
-            req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-            req.setValue("Murmur", forHTTPHeaderField: "User-Agent")
-            guard let (data, resp) = try? await URLSession.shared.data(for: req),
-                  (resp as? HTTPURLResponse)?.statusCode == 200,
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tag = obj["tag_name"] as? String else { return }
+        defer { inFlight = false }
+        var req = URLRequest(url: Self.api, timeoutInterval: 10)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("Murmur", forHTTPHeaderField: "User-Agent")
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard status == 200,
+                  let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = obj["tag_name"] as? String else {
+                return .failed("GitHub answered with HTTP \(status).")
+            }
             latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
             checkedAt = Date()
+            return newerVersion.map(Outcome.newer) ?? .upToDate
+        } catch {
+            return .failed(error.localizedDescription)
         }
     }
 

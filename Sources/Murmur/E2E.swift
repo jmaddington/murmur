@@ -144,6 +144,7 @@ enum E2E {
         if let r = await labTest() { results.append(r) }
         if let r = await evalTest() { results.append(r) }
         results.append(metricsTest())
+        results.append(await updateCheckTest())
         results.append(settingsMutationTest())
         results.append(contentsOf: await microphoneTests())
 
@@ -548,6 +549,23 @@ enum E2E {
         if let o = overall { notes.append(String(format: "end to end p50 %.2fs p90 %.2fs", o.p50, o.p90)) }
         log("  → \(pass ? "PASS" : "FAIL") metrics: \(notes)")
         return Result(name: "metrics · per-dictation timings + per-engine aggregates", passed: pass, raw: "", final: "", seconds: 0, notes: notes)
+    }
+
+    @MainActor private static func updateCheckTest() async -> Result {
+        log("case update check")
+        let cmp = UpdateCheck.isNewer("0.1.10", than: "0.1.9") && !UpdateCheck.isNewer("0.1.9", than: "0.1.10")
+            && !UpdateCheck.isNewer("0.1.10", than: "0.1.10") && UpdateCheck.isNewer("1.0", than: "0.9.9")
+        var notes = ["version ordering \(cmp ? "✓" : "✗")"]
+        var live = true
+        if ProcessInfo.processInfo.environment["CI"] == nil {
+            switch await UpdateCheck.shared.checkNow() {
+            case .newer(let v): notes.append("GitHub latest \(v) > \(UpdateCheck.currentVersion) ✓")
+            case .upToDate: notes.append("up to date with GitHub ✓")
+            case .failed(let why): live = false; notes.append("live check failed: \(why)")
+            }
+        }
+        log("  → \(cmp && live ? "PASS" : "FAIL") update check: \(notes)")
+        return Result(name: "update check", passed: cmp && live, raw: "", final: "", seconds: 0, notes: notes)
     }
 
     // MARK: Screenshots
