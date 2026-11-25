@@ -17,9 +17,12 @@ final class HotkeyManager {
     /// Another key was pressed while the trigger modifier was held — it's a chord, not dictation.
     var onChord: (() -> Void)?
     var onEscape: (() -> Void)?
+    /// The separate hands-free shortcut was pressed.
+    var onToggle: (() -> Void)?
 
     private var monitors: [Any] = []
     private var hotKeyRef: EventHotKeyRef?
+    private var toggleRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private var modifierDown = false
     private(set) var suspended = false
@@ -30,6 +33,12 @@ final class HotkeyManager {
         switch c.triggerKind {
         case .modifier: installModifier(c.triggerModifier)
         case .shortcut: installShortcut(c.shortcut)
+        }
+        if c.handsFreeShortcutEnabled && !(c.triggerKind == .shortcut && c.shortcut == c.handsFreeShortcut) {
+            installCarbonHandler()
+            let id = EventHotKeyID(signature: OSType(0x4D524D52), id: 2)
+            RegisterEventHotKey(c.handsFreeShortcut.keyCode, Self.carbonModifiers(c.handsFreeShortcut.modifiers), id,
+                                GetApplicationEventTarget(), 0, &toggleRef)
         }
         // Escape cancels; keyDown also detects chords for the modifier trigger.
         let keyHandler: (NSEvent) -> Void = { [weak self] e in
@@ -51,8 +60,10 @@ final class HotkeyManager {
         monitors.forEach(NSEvent.removeMonitor)
         monitors.removeAll()
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
+        if let toggleRef { UnregisterEventHotKey(toggleRef) }
         if let handlerRef { RemoveEventHandler(handlerRef) }
         hotKeyRef = nil
+        toggleRef = nil
         handlerRef = nil
         modifierDown = false
     }
@@ -77,21 +88,34 @@ final class HotkeyManager {
 
     // MARK: Shortcut (Carbon — works without Accessibility)
 
-    private func installShortcut(_ combo: KeyCombo) {
+    /// One Carbon handler serves both hot keys: id 1 = push-to-talk shortcut,
+    /// id 2 = hands-free toggle.
+    private func installCarbonHandler() {
+        guard handlerRef == nil else { return }
         var types = [
             EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
             EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
         ]
-        let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
             let kind = GetEventKind(event)
             let time = GetEventTime(event)
+            var hk = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                              nil, MemoryLayout<EventHotKeyID>.size, nil, &hk)
+            let pressed = kind == UInt32(kEventHotKeyPressed)
             MainActor.assumeIsolated {
-                if kind == UInt32(kEventHotKeyPressed) { HotkeyManager.shared.onPress?(time) }
-                else { HotkeyManager.shared.onRelease?(time) }
+                let m = HotkeyManager.shared
+                if hk.id == 2 { if pressed { m.onToggle?() } }
+                else if pressed { m.onPress?(time) }
+                else { m.onRelease?(time) }
             }
             return noErr
         }, 2, &types, nil, &handlerRef)
-        guard status == noErr else { return }
+    }
+
+    private func installShortcut(_ combo: KeyCombo) {
+        installCarbonHandler()
+        guard handlerRef != nil else { return }
         let id = EventHotKeyID(signature: OSType(0x4D524D52), id: 1) // 'MRMR'
         RegisterEventHotKey(combo.keyCode, Self.carbonModifiers(combo.modifiers), id, GetApplicationEventTarget(), 0, &hotKeyRef)
     }

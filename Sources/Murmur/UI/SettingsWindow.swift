@@ -387,10 +387,25 @@ struct ShortcutPane: View {
     @Bindable var settings = AppSettings.shared
     @ViewState private var launchAtLogin = AppSettings.shared.launchAtLogin
 
+    private var pttName: String {
+        settings.config.triggerKind == .modifier
+            ? (settings.config.triggerModifier.label.components(separatedBy: "  ").first ?? "the key")
+            : settings.config.shortcut.displayParts.joined()
+    }
+
+    private var handsFreeHow: String {
+        let c = settings.config
+        var ways: [String] = []
+        if c.handsFreeShortcutEnabled { ways.append("press \(c.handsFreeShortcut.displayParts.joined())") }
+        if c.tapForHandsFree { ways.append("tap \(pttName)") }
+        guard !ways.isEmpty else { return "Off. Turn on a hands-free shortcut above, or the quick tap." }
+        return ways.joined(separator: " or ").prefix(1).uppercased() + ways.joined(separator: " or ").dropFirst() + " to keep listening; do it again to finish."
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             PaneHeader(symbol: Pane.shortcut.symbol, color: Pane.shortcut.color, title: "Shortcut",
-                       subtitle: "Hold to talk, release to type. Tap once for hands-free.")
+                       subtitle: "Hold to talk, release to type. Hands-free when you need it.")
             Form {
                 Section {
                     Picker("Trigger", selection: $settings.config.triggerKind) {
@@ -425,9 +440,36 @@ struct ShortcutPane: View {
                         }
                     }
                 }
+                Section {
+                    Toggle(isOn: $settings.config.handsFreeShortcutEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Separate hands-free shortcut")
+                            Text("Press once to start listening, again to finish and type.")
+                                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    if settings.config.handsFreeShortcutEnabled {
+                        LabeledContent("Shortcut") { ShortcutRecorder(combo: $settings.config.handsFreeShortcut) }
+                        if settings.config.triggerKind == .shortcut && settings.config.shortcut == settings.config.handsFreeShortcut {
+                            Label("That's also your push-to-talk shortcut — pick a different one.", systemImage: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11.5)).foregroundStyle(.orange)
+                        }
+                    }
+                    Toggle(isOn: $settings.config.tapForHandsFree) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Quick tap of \(pttName) also starts hands-free")
+                            Text("Off: \(pttName) is push-to-talk only — a tap does nothing.")
+                                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                } header: {
+                    Text("Hands-free")
+                }
                 Section("How it works") {
-                    HowRow(symbol: "hand.point.down.fill", title: "Push to talk", detail: "Hold the key, speak, let go. Text appears where your cursor is.")
-                    HowRow(symbol: "hand.tap.fill", title: "Hands-free", detail: "Tap the key once to keep listening. Tap again to finish.")
+                    HowRow(symbol: "hand.point.down.fill", title: "Push to talk", detail: "Hold \(pttName), speak, let go. Text appears where your cursor is.")
+                    HowRow(symbol: "hand.tap.fill", title: "Hands-free", detail: handsFreeHow)
                     HowRow(symbol: "escape", title: "Cancel", detail: "Press esc at any time to discard the recording.")
                 }
                 Section("Sounds") {
@@ -466,6 +508,8 @@ struct ShortcutPane: View {
         .onChange(of: settings.config.triggerKind) { HotkeyManager.shared.install() }
         .onChange(of: settings.config.triggerModifier) { HotkeyManager.shared.install() }
         .onChange(of: settings.config.shortcut) { HotkeyManager.shared.install() }
+        .onChange(of: settings.config.handsFreeShortcutEnabled) { HotkeyManager.shared.install() }
+        .onChange(of: settings.config.handsFreeShortcut) { HotkeyManager.shared.install() }
     }
 }
 

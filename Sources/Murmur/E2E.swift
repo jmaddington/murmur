@@ -145,6 +145,7 @@ enum E2E {
         if let r = await evalTest() { results.append(r) }
         results.append(metricsTest())
         results.append(await updateCheckTest())
+        if let r = await hotkeyTest() { results.append(r) }
         results.append(settingsMutationTest())
         results.append(contentsOf: await microphoneTests())
 
@@ -566,6 +567,78 @@ enum E2E {
         }
         log("  → \(cmp && live ? "PASS" : "FAIL") update check: \(notes)")
         return Result(name: "update check", passed: cmp && live, raw: "", final: "", seconds: 0, notes: notes)
+    }
+
+    /// Real synthetic key events: fn push-to-talk only vs tap-to-latch, and
+    /// the separate hands-free toggle shortcut (⌃⌥Space).
+    @MainActor private static func hotkeyTest() async -> Result? {
+        guard TextInserter.hasAccessibility, Permissions.microphone == .authorized,
+              ProcessInfo.processInfo.environment["CI"] == nil else { return nil }
+        log("case hotkeys · fn push-to-talk, tap option, hands-free toggle")
+        let ctl = DictationController.shared
+        var cfg = AppSettings.shared.config
+        cfg.engine = .apple
+        cfg.cleanupEnabled = false
+        cfg.triggerKind = .modifier
+        cfg.triggerModifier = .fn
+        cfg.handsFreeShortcutEnabled = true
+        cfg.handsFreeShortcut = .handsFreeDefault
+        cfg.tapForHandsFree = false
+        AppSettings.shared.config = cfg
+        ctl.install()
+        defer { HotkeyManager.shared.uninstall() }
+
+        func fn(_ down: Bool) {
+            let e = CGEvent(keyboardEventSource: nil, virtualKey: 63, keyDown: down)!
+            e.type = .flagsChanged
+            e.flags = down ? .maskSecondaryFn : []
+            e.post(tap: .cghidEventTap)
+        }
+        func toggleKey() {
+            for down in [true, false] {
+                let e = CGEvent(keyboardEventSource: nil, virtualKey: 49, keyDown: down)!
+                e.flags = [.maskControl, .maskAlternate]
+                e.post(tap: .cghidEventTap)
+            }
+        }
+        func settle() async {
+            for _ in 0..<100 where ctl.busy || ctl.phase == .listening { try? await Task.sleep(for: .milliseconds(100)) }
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+        func listening() -> Bool { ctl.phase == .listening }
+
+        var notes: [String] = []
+        // 1. Tap fn with tap-to-latch off → nothing keeps listening.
+        fn(true); try? await Task.sleep(for: .milliseconds(120)); fn(false)
+        try? await Task.sleep(for: .milliseconds(700))
+        let tapIgnored = !listening()
+        notes.append("fn tap, latch off → \(tapIgnored ? "not listening ✓" : "still listening ✗")")
+        await settle()
+        // 2. Hold fn → listening while held, stops on release.
+        fn(true); try? await Task.sleep(for: .milliseconds(900))
+        let held = listening()
+        fn(false); try? await Task.sleep(for: .milliseconds(400))
+        let released = !listening()
+        notes.append("fn hold → \(held ? "listening" : "idle"), release → \(released ? "stopped ✓" : "still listening ✗")")
+        await settle()
+        // 3. Toggle shortcut starts hands-free; second press finishes.
+        toggleKey(); try? await Task.sleep(for: .milliseconds(900))
+        let toggledOn = listening() && ctl.latched
+        toggleKey(); try? await Task.sleep(for: .milliseconds(500))
+        let toggledOff = !listening()
+        notes.append("⌃⌥Space → \(toggledOn ? "hands-free on" : "✗"), again → \(toggledOff ? "finished ✓" : "✗")")
+        await settle()
+        // 4. Tap-to-latch on → a quick fn tap latches.
+        AppSettings.shared.config.tapForHandsFree = true
+        fn(true); try? await Task.sleep(for: .milliseconds(120)); fn(false)
+        try? await Task.sleep(for: .milliseconds(700))
+        let latched = listening() && ctl.latched
+        notes.append("fn tap, latch on → \(latched ? "hands-free ✓" : "✗")")
+        if listening() { ctl.cancel(silently: true) }
+        await settle()
+        let ok = tapIgnored && held && released && toggledOn && toggledOff && latched
+        log("  → \(ok ? "PASS" : "FAIL") hotkeys: \(notes)")
+        return Result(name: "hotkeys · fn push-to-talk + hands-free toggle", passed: ok, raw: "", final: "", seconds: 0, notes: notes)
     }
 
     // MARK: Screenshots

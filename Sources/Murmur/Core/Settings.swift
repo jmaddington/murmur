@@ -58,6 +58,7 @@ struct KeyCombo: Codable, Hashable {
     /// NSEvent.ModifierFlags raw value (device-independent bits only).
     var modifiers: UInt
     static let `default` = KeyCombo(keyCode: 49, modifiers: NSEvent.ModifierFlags.option.rawValue) // ⌥Space
+    static let handsFreeDefault = KeyCombo(keyCode: 49, modifiers: NSEvent.ModifierFlags([.control, .option]).rawValue) // ⌃⌥Space
 }
 
 enum TriggerKind: String, Codable, CaseIterable, Identifiable {
@@ -149,6 +150,11 @@ struct Config: Codable {
     var triggerKind: TriggerKind = .modifier
     var triggerModifier: TriggerModifier = .fn
     var shortcut: KeyCombo = .default
+    /// Quick tap of the push-to-talk key latches hands-free mode.
+    var tapForHandsFree = true
+    /// A separate shortcut that starts / finishes hands-free dictation.
+    var handsFreeShortcutEnabled = false
+    var handsFreeShortcut: KeyCombo = .handsFreeDefault
 
     // Microphones (ordered by priority)
     var microphones: [MicRecord] = []
@@ -213,6 +219,7 @@ struct Config: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         func d<T: Decodable>(_ k: CodingKeys, _ v: inout T) { if let x = try? c.decode(T.self, forKey: k) { v = x } }
         d(.triggerKind, &triggerKind); d(.triggerModifier, &triggerModifier); d(.shortcut, &shortcut)
+        d(.tapForHandsFree, &tapForHandsFree); d(.handsFreeShortcutEnabled, &handsFreeShortcutEnabled); d(.handsFreeShortcut, &handsFreeShortcut)
         d(.microphones, &microphones); d(.engine, &engine); d(.appleModel, &appleModel); d(.localModel, &localModel); d(.localeIdentifier, &localeIdentifier)
         d(.openrouterTranscribeModel, &openrouterTranscribeModel); d(.customTranscribeURL, &customTranscribeURL)
         d(.customTranscribeModel, &customTranscribeModel); d(.cleanupEnabled, &cleanupEnabled)

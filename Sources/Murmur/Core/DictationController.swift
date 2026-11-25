@@ -62,6 +62,7 @@ final class DictationController {
         hk.onRelease = { [weak self] t in self?.triggerUp(at: t) }
         hk.onChord = { [weak self] in self?.chord() }
         hk.onEscape = { [weak self] in self?.escape() }
+        hk.onToggle = { [weak self] in self?.toggleFromMenu() }
         hk.install()
     }
 
@@ -81,7 +82,7 @@ final class DictationController {
         // Measured between the two key events themselves: begin() blocks the
         // main thread while the audio hardware opens, so the release is often
         // *handled* well after the tap threshold even for a quick tap.
-        if time - pressedAt < Self.tapThreshold {
+        if time - pressedAt < Self.tapThreshold && AppSettings.shared.config.tapForHandsFree {
             latched = true // quick tap → hands-free until the next tap
         } else {
             stop()
