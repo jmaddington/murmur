@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Murmur — dictation for macOS</title>
-<meta name="description" content="Hold a key, speak, release. Murmur types polished text wherever your cursor is. Native macOS, on-device or OpenRouter models.">
+<meta name="description" content="Hold a key, speak, release. Murmur types polished text wherever your cursor is. Native macOS with on-device Parakeet, Apple or Voxtral models, or any model via OpenRouter.">
 <meta property="og:title" content="Murmur — dictation for macOS">
 <meta property="og:description" content="Hold a key, speak, release. Polished text appears wherever you type.">
 <meta property="og:image" content="media/demo-poster.jpg">
@@ -39,7 +39,7 @@ nav .links a:hover { color: var(--ink); }
 /* Hero */
 .hero { position: relative; padding: 88px 0 40px; text-align: center; overflow: hidden; }
 .hero::before { content: ""; position: absolute; inset: -40% -10% auto; height: 620px; background: var(--brand); opacity: .14; filter: blur(90px); border-radius: 50%; z-index: -1; }
-.hero .icon { width: 96px; height: 96px; filter: drop-shadow(0 18px 30px rgba(91,76,249,.35)); }
+.hero .icon { width: 84px; height: 84px; filter: drop-shadow(0 14px 24px rgba(91,76,249,.28)); }
 h1 { font-size: clamp(44px, 7vw, 80px); line-height: 1.02; letter-spacing: -.035em; margin: 22px 0 16px; font-weight: 800; }
 h1 .grad { background: var(--brand); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .lede { font-size: clamp(18px, 2.2vw, 22px); color: var(--ink2); max-width: 640px; margin: 0 auto 30px; }
@@ -52,38 +52,38 @@ h1 .grad { background: var(--brand); -webkit-background-clip: text; background-c
 kbd { font: 600 .92em -apple-system, system-ui; padding: 2px 8px; border-radius: 6px; background: var(--card); border: 1px solid var(--line); box-shadow: 0 1px 0 var(--line); }
 
 /* Video */
-.stage { margin: 48px auto 0; max-width: 1000px; border-radius: 18px; overflow: hidden; box-shadow: 0 30px 80px rgba(40,20,110,.35), 0 0 0 1px var(--line); position: relative; background: #1b1530; }
+.stage { margin: 56px auto 0; max-width: 920px; border-radius: 16px; overflow: hidden; box-shadow: 0 24px 64px rgba(40,20,110,.20), 0 0 0 1px var(--line); position: relative; background: #1b1530; }
 .stage video { display: block; width: 100%; height: auto; }
 .sound { position: absolute; right: 14px; bottom: 14px; border: 0; cursor: pointer; padding: 8px 14px; border-radius: 999px; font: 600 13px -apple-system, system-ui;
          color: #fff; background: rgba(0,0,0,.55); backdrop-filter: blur(10px); }
 
 /* Sections */
-section { padding: 96px 0 0; }
+section { padding: 104px 0 0; }
 .eyebrow { font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; background: var(--brand); -webkit-background-clip: text; background-clip: text; color: transparent; }
-h2 { font-size: clamp(30px, 4vw, 44px); letter-spacing: -.025em; line-height: 1.1; margin: 8px 0 14px; }
-.sub { color: var(--ink2); font-size: 18px; max-width: 660px; margin: 0 0 36px; }
+h2 { font-size: clamp(26px, 3vw, 36px); font-weight: 700; letter-spacing: -.02em; line-height: 1.15; margin: 8px 0 12px; }
+.sub { color: var(--ink2); font-size: 17px; max-width: 640px; margin: 0 0 32px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 22px; box-shadow: var(--shadow); }
-.card .ic { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: #fff; font-size: 18px; margin-bottom: 14px; }
-.card h3 { margin: 0 0 6px; font-size: 17px; letter-spacing: -.01em; }
-.card p { margin: 0; color: var(--ink2); font-size: 14.5px; }
+.card .ic { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; color: #fff; font-size: 18px; margin-bottom: 14px; }
+.card h3 { margin: 0 0 6px; font-size: 16.5px; font-weight: 650; letter-spacing: -.01em; }
+.card p { margin: 0; color: var(--ink2); font-size: 15px; }
 
 /* Pipeline */
 .pipe { display: flex; align-items: stretch; gap: 10px; flex-wrap: wrap; }
-.step { flex: 1 1 160px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; position: relative; }
-.step b { display: block; font-size: 15px; margin-bottom: 4px; }
-.step span { color: var(--ink2); font-size: 13.5px; }
-.step .n { font: 700 12px -apple-system, system-ui; color: var(--violet); margin-bottom: 8px; display: block; }
+.step { flex: 1 1 160px; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 20px; position: relative; box-shadow: var(--shadow); }
+.step b { display: block; font-size: 16px; font-weight: 650; margin-bottom: 4px; }
+.step span { color: var(--ink2); font-size: 14.5px; }
+.step .n { font: 700 13px -apple-system, system-ui; color: var(--violet); margin-bottom: 10px; display: block; letter-spacing: .04em; }
 
 /* HUD strip */
 .huds { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
-.huds figure { margin: 0; border-radius: 16px; overflow: hidden; border: 1px solid var(--line); background: #2a1f45; }
+.huds figure { margin: 0; border-radius: 18px; overflow: hidden; border: 1px solid var(--line); background: var(--card); box-shadow: var(--shadow); }
 .huds img { display: block; width: 100%; height: 150px; object-fit: cover; object-position: center bottom; }
-figcaption { font-size: 13px; color: var(--ink2); padding: 10px 14px; background: var(--card); }
+figcaption { font-size: 14px; color: var(--ink2); padding: 12px 16px; background: var(--card); }
 
 /* Gallery */
-.shots { display: grid; grid-template-columns: repeat(2, 1fr); gap: 22px; }
+.shots { display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px 24px; }
 .shots figure { margin: 0; }
 .shots img { width: 100%; border-radius: 14px; box-shadow: var(--shadow); border: 1px solid var(--line); display: block; }
 .shots figcaption { background: none; padding: 10px 2px 0; }
@@ -138,13 +138,13 @@ footer { padding: 90px 0 50px; color: var(--ink3); font-size: 13px; text-align: 
     <h2>Everything dictation should have been.</h2>
     <p class="sub">A native Mac app with a Rust core, built to be fast, private by default, and pleasant to look at.</p>
     <div class="grid">
-      <div class="card"><div class="ic" style="background:#5b4cf9"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></div><h3>One key, anywhere</h3><p>Hold fn, right ⌥ or any custom shortcut to talk. Tap once for hands-free, esc to cancel.</p></div>
-      <div class="card"><div class="ic" style="background:#2f7cf6"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div><h3>On-device by default</h3><p>Apple's SpeechAnalyzer transcribes locally with a live preview, in about a tenth of a second after you let go.</p></div>
-      <div class="card"><div class="ic" style="background:#0ea5a5"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></div><h3>Or any model you like</h3><p>Gemini and other audio models via OpenRouter, or your own Whisper-compatible server.</p></div>
-      <div class="card"><div class="ic" style="background:#b951ed"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg></div><h3>Polish pass</h3><p>An LLM removes ums, applies "no wait, I mean…" corrections and fixes mishearings. Apple Intelligence, OpenRouter, or Ollama.</p></div>
+      <div class="card"><div class="ic" style="background:#5b4cf9"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></div><h3>One key, anywhere</h3><p>Hold fn, right ⌥ or any shortcut to talk. A second shortcut for hands-free; esc cancels.</p></div>
+      <div class="card"><div class="ic" style="background:#2f7cf6"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div><h3>On-device by default</h3><p>NVIDIA Parakeet on the Neural Engine, or Apple's speech models. Text about a tenth of a second after you let go.</p></div>
+      <div class="card"><div class="ic" style="background:#0ea5a5"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></div><h3>Or any model you like</h3><p>Mistral's Voxtral via MLX, audio models through OpenRouter, or your own Whisper-compatible server.</p></div>
+      <div class="card"><div class="ic" style="background:#b951ed"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg></div><h3>Polish pass</h3><p>An LLM removes ums, applies "no wait, I mean…" corrections and fixes mishearings. Apple Intelligence, OpenRouter or Ollama, with your own prompt.</p></div>
       <div class="card"><div class="ic" style="background:#f59e0b"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2z"/><path d="M4 19V5M8 7h6"/></svg></div><h3>Custom vocabulary</h3><p>Names, jargon and acronyms that steer the recognizer, go into every prompt, and correct known mishearings automatically.</p></div>
       <div class="card"><div class="ic" style="background:#ef4444"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></div><h3>Every mic, in order</h3><p>Rank your microphones. If one disconnects or goes silent mid-sentence, Murmur switches to the next one.</p></div>
-      <div class="card"><div class="ic" style="background:#14b8a6"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><h3>History you control</h3><p>Keep audio and transcripts for a day, a year or not at all. Replay, copy or re-transcribe any of them.</p></div>
+      <div class="card"><div class="ic" style="background:#14b8a6"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><h3>History and the Lab</h3><p>Keep recordings as long as you like, then replay them through other models and prompts to find your fastest good setup.</p></div>
       <div class="card"><div class="ic" style="background:#64748b"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8M12 13v8"/></svg></div><h3>Built for teams</h3><p>Signed DMG and PKG installers, plus an MDM profile that pre-approves Accessibility.</p></div>
     </div>
   </div>
@@ -187,10 +187,10 @@ footer { padding: 90px 0 50px; color: var(--ink3); font-size: 13px; text-align: 
     <div class="shots">
       <figure><img src="media/home-light.png" alt="Home" loading="lazy"><figcaption>Home: your shortcut, stats and recent dictations</figcaption></figure>
       <figure><img src="media/home-dark.png" alt="Home in dark mode" loading="lazy"><figcaption>…and the same in dark mode</figcaption></figure>
-      <figure><img src="media/transcription.png" alt="Transcription settings" loading="lazy"><figcaption>Choose on-device, OpenRouter or your own server</figcaption></figure>
-      <figure><img src="media/cleanup.png" alt="Cleanup settings" loading="lazy"><figcaption>Cleanup with a built-in playground</figcaption></figure>
-      <figure><img src="media/vocabulary.png" alt="Vocabulary" loading="lazy"><figcaption>Vocabulary with "often heard as" variants</figcaption></figure>
-      <figure><img src="media/history.png" alt="History" loading="lazy"><figcaption>History with separate audio and text retention</figcaption></figure>
+      <figure><img src="media/open-models.png" alt="Open models" loading="lazy"><figcaption>Open models, downloaded on demand and run on your Mac</figcaption></figure>
+      <figure><img src="media/custom-prompt.png" alt="Custom cleanup prompt" loading="lazy"><figcaption>Write your own cleanup prompt, with placeholders</figcaption></figure>
+      <figure><img src="media/shortcut.png" alt="Shortcut settings" loading="lazy"><figcaption>Push-to-talk plus a hands-free shortcut</figcaption></figure>
+      <figure><img src="media/vocabulary-light.png" alt="Vocabulary" loading="lazy"><figcaption>Vocabulary with "often heard as" variants</figcaption></figure>
     </div>
   </div>
 </section>
@@ -203,7 +203,7 @@ footer { padding: 90px 0 50px; color: var(--ink3); font-size: 13px; text-align: 
       <p class="sub">With the default settings, nothing leaves your Mac. Remote models are opt-in, and you choose exactly which ones.</p>
     </div>
     <ul>
-      <li><b>On-device transcription</b> with Apple's speech models</li>
+      <li><b>On-device transcription</b> with Parakeet or Apple's speech models</li>
       <li><b>On-device cleanup</b> with Apple Intelligence</li>
       <li><b>API keys in the Keychain</b>, never in files</li>
       <li><b>Retention you set</b>, separately for audio and text</li>
